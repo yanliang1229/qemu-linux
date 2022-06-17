@@ -16,7 +16,10 @@ define LINUX_HELP_CMDS
 endef
 
 # Compute LINUX_SOURCE and LINUX_SITE from the configuration
-ifeq ($(BR2_LINUX_KERNEL_CUSTOM_TARBALL),y)
+ifeq ($(BR2_LINUX_KERNEL_CUSTOM_LOCAL),y)
+LINUX_SITE = kernel
+LINUX_SITE_METHOD = local
+else ifeq ($(BR2_LINUX_KERNEL_CUSTOM_TARBALL),y)
 LINUX_TARBALL = $(call qstrip,$(BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION))
 LINUX_SITE = $(patsubst %/,%,$(dir $(LINUX_TARBALL)))
 LINUX_SOURCE = $(notdir $(LINUX_TARBALL))

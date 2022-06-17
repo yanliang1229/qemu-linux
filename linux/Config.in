@@ -79,6 +79,12 @@ config BR2_LINUX_KERNEL_CUSTOM_GIT
 	  This option allows Buildroot to get the Linux kernel source
 	  code from a Git repository.
 
+config BR2_LINUX_KERNEL_CUSTOM_LOCAL
+	bool "Custom local kernel source"
+	help
+	  This option allows Buildroot to get the Linux kernel source
+	  code from a local source.
+
 config BR2_LINUX_KERNEL_CUSTOM_HG
 	bool "Custom Mercurial repository"
 	help
