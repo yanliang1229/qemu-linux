@@ -24,7 +24,7 @@ do_build_debug()
 			-net user,hostfwd=tcp::5555-:22 \
 			-net nic \
 			-serial stdio \
-			-sd rootfs.toy
+			-sd ../output/images/rootfs.ext2
 		;;
 		-d)
 			qemu-system-aarch64 -M virt-cortex-a53,gic_version=2  \
@@ -34,7 +34,7 @@ do_build_debug()
 			-append "root=/dev/mmcblk0 console=ttyAMA0 rootfstype=toy rw dsched_debug" \
 			-serial stdio \
 			-S -s \
-			-sd rootfs.toy
+			-sd ../output/images/rootfs.ext2
 		;;
 		-f)
 			echo "===== make rootfs ========="

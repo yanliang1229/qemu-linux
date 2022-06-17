@@ -1,0 +1,4 @@
+config BR2_PACKAGE_MMAP
+	bool "sys_mmap test"
+	help
+	  sys_mmap test

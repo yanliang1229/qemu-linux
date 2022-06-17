@@ -13,3 +13,4 @@
 *.rej
 *~
 *.pyc
+kernel/output_arm64/

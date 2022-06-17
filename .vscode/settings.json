@@ -185,7 +185,9 @@
         "kernel/usr":true,
         "kernel/output": true,
         "kernel/output_arm64":true,
-        "kernel/rootfs":true
+        "kernel/rootfs":true,
+        "output":true,
+        "dl":true
     },
 
     //-------- Files configuration --------
