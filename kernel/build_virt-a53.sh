@@ -16,7 +16,7 @@ do_build_debug()
 			make  O=output_arm64 -j${CPUS}
 		;;
 		-r)
-			qemu-system-aarch64 -M virt-cortex-a53,gic_version=2  \
+			../qemu/qemu-system-aarch64 -M virt-cortex-a53,gic_version=2  \
 			-smp cpus=4 -m 4096M  \
 			-kernel output_arm64/arch/arm64/boot/Image \
 			-dtb output_arm64/arch/arm64/boot/dts/arm/virt-a53-gicv2.dtb \
@@ -27,7 +27,7 @@ do_build_debug()
 			-sd ../output/images/rootfs.ext2
 		;;
 		-d)
-			qemu-system-aarch64 -M virt-cortex-a53,gic_version=2  \
+			../qemu/qemu-system-aarch64 -M virt-cortex-a53,gic_version=2  \
 			-smp cpus=4 -m 4096M  \
 			-kernel output_arm64/arch/arm64/boot/Image \
 			-dtb output_arm64/arch/arm64/boot/dts/arm/virt-a53-gicv2.dtb \
