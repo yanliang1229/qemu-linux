@@ -18,7 +18,7 @@ int main(int argc,char *argv[])
         perror("mmap error");
         exit(1);
     }
-    printf("mmap: 0x%x\n", ptr);
+    printf("mmap: 0x%16lx\n", ptr);
 
     //创建子进程
     pid_t pid = fork();

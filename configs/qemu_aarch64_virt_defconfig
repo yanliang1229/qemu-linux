@@ -14,7 +14,6 @@ BR2_TARGET_GENERIC_ISSUE="Welcome to Qemu Linux"
 
 # Filesystem
 BR2_TARGET_ROOTFS_EXT2=y
-BR2_TARGET_ROOTFS_EXT2_4=y
 # BR2_TARGET_ROOTFS_TAR is not set
 
 # Linux headers same as kernel, a 4.4 series

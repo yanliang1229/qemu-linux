@@ -20,7 +20,7 @@ do_build_debug()
 			-smp cpus=4 -m 4096M  \
 			-kernel output_arm64/arch/arm64/boot/Image \
 			-dtb output_arm64/arch/arm64/boot/dts/arm/virt-a53-gicv2.dtb \
-			-append "root=/dev/mmcblk0 console=ttyAMA0 rootfstype=toy rw dsched_debug" \
+			-append "root=/dev/mmcblk0 console=ttyAMA0 rw dsched_debug" \
 			-net user,hostfwd=tcp::5555-:22 \
 			-net nic \
 			-serial stdio \
@@ -31,7 +31,7 @@ do_build_debug()
 			-smp cpus=4 -m 4096M  \
 			-kernel output_arm64/arch/arm64/boot/Image \
 			-dtb output_arm64/arch/arm64/boot/dts/arm/virt-a53-gicv2.dtb \
-			-append "root=/dev/mmcblk0 console=ttyAMA0 rootfstype=toy rw dsched_debug" \
+			-append "root=/dev/mmcblk0 console=ttyAMA0 rw dsched_debug" \
 			-serial stdio \
 			-S -s \
 			-sd ../output/images/rootfs.ext2
