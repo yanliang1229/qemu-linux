@@ -115,6 +115,12 @@
 		#redistributor-regions = <1>;
 		reg = <0 0x8000000 0 0x10000>,
 		      <0 0x80a0000 0 0xf60000>;
+
+		its: gic-its@8080000 {
+			compatible = "arm,gic-v3-its";
+			msi-controller;
+			reg = <0 0x08080000 0 0x00020000>;
+		};
 	};
 
 	pmu {
@@ -277,6 +283,43 @@
 				spi-max-frequency = <12000000>;
 				reg = <0>;
 			};
+		};
+
+		pcie0: pcie@10000000 {
+			compatible = "pci-host-ecam-generic";
+			device_type = "pci";
+			reg = <0x40 0x10000000 0x00 0x10000000>;
+			bus-range = <0 255>;
+			linux,pci-domain = <0>;
+			#address-cells = <3>;
+			#size-cells = <2>;
+			dma-coherent;
+			ranges =
+				<0x1000000 0x00 0x00 0x00 0x3eff0000 0x00 0x10000>,
+				<0x2000000 0x00 0x10000000 0x00 0x10000000 0x00 0x2eff0000>,
+				<0x3000000 0x80 0x00 0x80 0x00 0x80 0x00>;
+			#interrupt-cells = <1>;
+			/* devfn, 0, 0, pci_irq */
+			interrupt-map-mask = <0x1800 0 0 7>;
+			/* devfn<<8, 0, 0, pci_pin, gic, 0, 0, irq_type, irq_nr, irq_level */
+			interrupt-map =
+				<0 0 0 1 &gic 0 0 GIC_SPI 3 IRQ_TYPE_LEVEL_HIGH>,
+				<0 0 0 2 &gic 0 0 GIC_SPI 4 IRQ_TYPE_LEVEL_HIGH>,
+				<0 0 0 3 &gic 0 0 GIC_SPI 5 IRQ_TYPE_LEVEL_HIGH>,
+				<0 0 0 4 &gic 0 0 GIC_SPI 6 IRQ_TYPE_LEVEL_HIGH>,
+				<0x800 0 0 1 &gic 0 0 GIC_SPI 4 IRQ_TYPE_LEVEL_HIGH>,
+				<0x800 0 0 2 &gic 0 0 GIC_SPI 5 IRQ_TYPE_LEVEL_HIGH>,
+				<0x800 0 0 3 &gic 0 0 GIC_SPI 6 IRQ_TYPE_LEVEL_HIGH>,
+				<0x800 0 0 4 &gic 0 0 GIC_SPI 3 IRQ_TYPE_LEVEL_HIGH>,
+				<0x1000 0 0 1 &gic 0 0 GIC_SPI 5 IRQ_TYPE_LEVEL_HIGH>,
+				<0x1000 0 0 2 &gic 0 0 GIC_SPI 6 IRQ_TYPE_LEVEL_HIGH>,
+				<0x1000 0 0 3 &gic 0 0 GIC_SPI 3 IRQ_TYPE_LEVEL_HIGH>,
+				<0x1000 0 0 4 &gic 0 0 GIC_SPI 4 IRQ_TYPE_LEVEL_HIGH>,
+				<0x1800 0 0 1 &gic 0 0 GIC_SPI 6 IRQ_TYPE_LEVEL_HIGH>,
+				<0x1800 0 0 2 &gic 0 0 GIC_SPI 3 IRQ_TYPE_LEVEL_HIGH>,
+				<0x1800 0 0 3 &gic 0 0 GIC_SPI 4 IRQ_TYPE_LEVEL_HIGH>,
+				<0x1800 0 0 4 &gic 0 0 GIC_SPI 5 IRQ_TYPE_LEVEL_HIGH>;
+			status = "okay";
 		};
 	};
 

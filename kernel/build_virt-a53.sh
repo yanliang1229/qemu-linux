@@ -23,7 +23,7 @@ do_build_debug()
 			-smp cpus=4 -m 4096M  \
 			-kernel ${OUTPUT_PATH}/arch/arm64/boot/Image \
                         -dtb ${OUTPUT_PATH}/arch/arm64/boot/dts/arm/virt-a53-gicv3.dtb \
-			-append "root=/dev/mmcblk0 earlycon=pl011,0x9000000 console=ttyAMA0 rootfstype=toy rw dsched_debug" \
+			-append "root=/dev/mmcblk0 earlycon=pl011,0x9000000 console=ttyAMA0 rw dsched_debug" \
 			-serial stdio \
 			-show-cursor \
 			-net user,hostfwd=tcp::5555-:22 \
@@ -31,16 +31,16 @@ do_build_debug()
 			-usb \
 			-drive if=none,format=raw,id=disk1,file=udisk.img \
 			-device usb-storage,drive=disk1 \
-			-sd rootfs.toy
+			-sd ../output/images/rootfs.ext2
 		;;
 		-d)
 			qemu-system-aarch64 -M virt-cortex-a53 -nographic \
 			-smp cpus=4 -m 4096M  \
 			-kernel ${OUTPUT_PATH}/arch/arm64/boot/Image \
-                        -dtb ${OUTPUT_PATH}/arch/arm64/boot/dts/arm/virt-a53-gicv2.dtb \
-			-append "root=/dev/mmcblk0 earlycon=pl011,0x9000000 console=ttyAMA0 rootfstype=toy rw dsched_debug" \
+                        -dtb ${OUTPUT_PATH}/arch/arm64/boot/dts/arm/virt-a53-gicv3.dtb \
+			-append "root=/dev/mmcblk0 earlycon=pl011,0x9000000 console=ttyAMA0  rw dsched_debug" \
 			-s -S  \
-			-sd rootfs.toy
+			-sd ../output/images/rootfs.ext2
 		;;
 		-f)
 			echo "===== make rootfs ========="
