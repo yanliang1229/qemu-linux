@@ -319,7 +319,7 @@
 				<0x1800 0 0 2 &gic 0 0 GIC_SPI 3 IRQ_TYPE_LEVEL_HIGH>,
 				<0x1800 0 0 3 &gic 0 0 GIC_SPI 4 IRQ_TYPE_LEVEL_HIGH>,
 				<0x1800 0 0 4 &gic 0 0 GIC_SPI 5 IRQ_TYPE_LEVEL_HIGH>;
-			status = "okay";
+			status = "disabled";
 		};
 	};
 
