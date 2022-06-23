@@ -1,8 +1,4 @@
-/*
- *  linux/fs/toy/namei.c
- *
- *  Copyright (C) 1991, 1992  Linus Torvalds
- */
+/* SPDX-License-Identifier: GPL-2.0 */
 
 #include "toy.h"
 
@@ -27,13 +23,12 @@ static struct dentry *toy_lookup(struct inode * dir, struct dentry *dentry, unsi
 		return ERR_PTR(-ENAMETOOLONG);
 
 	ino = toy_inode_by_name(dentry);
-	if (ino) {
+	/**
+	 * 找到索引节点对应的vfs虚拟文件系统的索引节点结构
+	 */
+	if (ino)
 		inode = toy_iget(dir->i_sb, ino);
-		if (IS_ERR(inode))
-			return ERR_CAST(inode);
-	}
-	d_add(dentry, inode);
-	return NULL;
+	return d_splice_alias(inode, dentry);
 }
 
 static int toy_mknod(struct inode * dir, struct dentry *dentry, umode_t mode, dev_t rdev)
@@ -106,7 +101,7 @@ static int toy_link(struct dentry * old_dentry, struct inode * dir,
 {
 	struct inode *inode = d_inode(old_dentry);
 
-	inode->i_ctime = CURRENT_TIME_SEC;
+	inode->i_ctime = current_time(inode);
 	inode_inc_link_count(inode);
 	ihold(inode);
 	return add_nondir(dentry, inode);
@@ -185,7 +180,8 @@ static int toy_rmdir(struct inode * dir, struct dentry *dentry)
 }
 
 static int toy_rename(struct inode * old_dir, struct dentry *old_dentry,
-			   struct inode * new_dir, struct dentry *new_dentry)
+			struct inode * new_dir, struct dentry *new_dentry,
+			unsigned int flags)
 {
 	struct inode * old_inode = d_inode(old_dentry);
 	struct inode * new_inode = d_inode(new_dentry);
@@ -194,6 +190,9 @@ static int toy_rename(struct inode * old_dir, struct dentry *old_dentry,
 	struct page * old_page;
 	struct toy_dir_entry * old_de;
 	int err = -ENOENT;
+
+	if (flags & ~RENAME_NOREPLACE)
+		return -EINVAL;
 
 	old_de = toy_find_entry(old_dentry, &old_page);
 	if (!old_de)
@@ -219,7 +218,7 @@ static int toy_rename(struct inode * old_dir, struct dentry *old_dentry,
 		if (!new_de)
 			goto out_dir;
 		toy_set_link(new_de, new_page, old_inode);
-		new_inode->i_ctime = CURRENT_TIME_SEC;
+		new_inode->i_ctime = current_time(new_inode);
 		if (dir_de)
 			drop_nlink(new_inode);
 		inode_dec_link_count(new_inode);
@@ -243,11 +242,11 @@ static int toy_rename(struct inode * old_dir, struct dentry *old_dentry,
 out_dir:
 	if (dir_de) {
 		kunmap(dir_page);
-		page_cache_release(dir_page);
+		put_page(dir_page);
 	}
 out_old:
 	kunmap(old_page);
-	page_cache_release(old_page);
+	put_page(old_page);
 out:
 	return err;
 }

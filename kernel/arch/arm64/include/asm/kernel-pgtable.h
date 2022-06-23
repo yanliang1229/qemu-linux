@@ -1,35 +1,21 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Kernel page table mapping
  *
  * Copyright (C) 2015 ARM Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #ifndef __ASM_KERNEL_PGTABLE_H
 #define __ASM_KERNEL_PGTABLE_H
 
+#include <asm/pgtable.h>
+#include <asm/sparsemem.h>
 
 /*
  * The linear mapping and the start of memory are both 2M aligned (per
  * the arm64 booting.txt requirements). Hence we can use section mapping
  * with 4K (section size = 2M) but not with 16K (section size = 32M) or
  * 64K (section size = 512M).
- * section map就是指使用2M的为单位进行映射,当然不是什么情况都是可以使用section map，
- * 对于kernel image，其起始地址是2M对齐的，因此block size是2M的情况下才OK，对于
- * PAGE SIZE是16K，其Block descriptor指向了一个32M的内存块，PAGE SIZE是64K的时候，
- * Block descriptor指向了一个512M的内存块. 因此，只有4K page size的情况下，才可以
- * 启用section map
  */
 #ifdef CONFIG_ARM64_4K_PAGES
 #define ARM64_SWAPPER_USES_SECTION_MAPS 1
@@ -48,16 +34,6 @@
  * cases.
  */
 #if ARM64_SWAPPER_USES_SECTION_MAPS
-/**
- * 对于ARM64，由于虚拟地址空间变大了，因此我们需要更多的page来完成启动阶段的initial translation tables的构建
- * 我们仍然用VA是48 bit，page size是4K为例子进行说明。根据前面的描述，我们知道，内核空间的地址大小是256T，48 bit
- * 的地址被分成9 ＋ 9 ＋ 9 ＋ 9 ＋ 12，因此PGD（Level 0）、PUD（Level 1）、PMD（Level 2）、PT（Level 3）的
- * translation table中的entry都是512项，每个描述符是8个byte，因此这些translation table都是4KB，恰好是一个page size。
- * 根据链接脚本中的定义，idmap和swapper page tables （或者叫做translation table）分别保留了3个page的页面。3个page分别
- * 是3个level的translation table。等等，读者可能会问：上面不是说48 bit VA加上4K page size需要4阶translation table吗？
- * 这里怎么只有3个level？实际上，3级映射是PGD/PUM/PMD（每个table占据一个page），只不过PMD的内容不是下一级的table descriptor，
- * 而是基于2M block的mapping
- */
 #define SWAPPER_PGTABLE_LEVELS	(CONFIG_PGTABLE_LEVELS - 1)
 #define IDMAP_PGTABLE_LEVELS	(ARM64_HW_PGTABLE_LEVELS(PHYS_MASK_SHIFT) - 1)
 #else
@@ -65,8 +41,59 @@
 #define IDMAP_PGTABLE_LEVELS	(ARM64_HW_PGTABLE_LEVELS(PHYS_MASK_SHIFT))
 #endif
 
-#define SWAPPER_DIR_SIZE	(SWAPPER_PGTABLE_LEVELS * PAGE_SIZE)
+
+/*
+ * If KASLR is enabled, then an offset K is added to the kernel address
+ * space. The bottom 21 bits of this offset are zero to guarantee 2MB
+ * alignment for PA and VA.
+ *
+ * For each pagetable level of the swapper, we know that the shift will
+ * be larger than 21 (for the 4KB granule case we use section maps thus
+ * the smallest shift is actually 30) thus there is the possibility that
+ * KASLR can increase the number of pagetable entries by 1, so we make
+ * room for this extra entry.
+ *
+ * Note KASLR cannot increase the number of required entries for a level
+ * by more than one because it increments both the virtual start and end
+ * addresses equally (the extra entry comes from the case where the end
+ * address is just pushed over a boundary and the start address isn't).
+ */
+
+#ifdef CONFIG_RANDOMIZE_BASE
+#define EARLY_KASLR	(1)
+#else
+#define EARLY_KASLR	(0)
+#endif
+
+#define EARLY_ENTRIES(vstart, vend, shift) (((vend) >> (shift)) \
+					- ((vstart) >> (shift)) + 1 + EARLY_KASLR)
+
+#define EARLY_PGDS(vstart, vend) (EARLY_ENTRIES(vstart, vend, PGDIR_SHIFT))
+
+#if SWAPPER_PGTABLE_LEVELS > 3
+#define EARLY_PUDS(vstart, vend) (EARLY_ENTRIES(vstart, vend, PUD_SHIFT))
+#else
+#define EARLY_PUDS(vstart, vend) (0)
+#endif
+
+#if SWAPPER_PGTABLE_LEVELS > 2
+#define EARLY_PMDS(vstart, vend) (EARLY_ENTRIES(vstart, vend, SWAPPER_TABLE_SHIFT))
+#else
+#define EARLY_PMDS(vstart, vend) (0)
+#endif
+
+#define EARLY_PAGES(vstart, vend) ( 1 			/* PGDIR page */				\
+			+ EARLY_PGDS((vstart), (vend)) 	/* each PGDIR needs a next level page table */	\
+			+ EARLY_PUDS((vstart), (vend))	/* each PUD needs a next level page table */	\
+			+ EARLY_PMDS((vstart), (vend)))	/* each PMD needs a next level page table */
+#define INIT_DIR_SIZE (PAGE_SIZE * EARLY_PAGES(KIMAGE_VADDR + TEXT_OFFSET, _end))
 #define IDMAP_DIR_SIZE		(IDMAP_PGTABLE_LEVELS * PAGE_SIZE)
+
+#ifdef CONFIG_ARM64_SW_TTBR0_PAN
+#define RESERVED_TTBR0_SIZE	(PAGE_SIZE)
+#else
+#define RESERVED_TTBR0_SIZE	(0)
+#endif
 
 /* Initial memory map size */
 #if ARM64_SWAPPER_USES_SECTION_MAPS
@@ -89,11 +116,36 @@
 #define SWAPPER_PMD_FLAGS	(PMD_TYPE_SECT | PMD_SECT_AF | PMD_SECT_S)
 
 #if ARM64_SWAPPER_USES_SECTION_MAPS
-/* section映射属性值 */
 #define SWAPPER_MM_MMUFLAGS	(PMD_ATTRINDX(MT_NORMAL) | SWAPPER_PMD_FLAGS)
 #else
 #define SWAPPER_MM_MMUFLAGS	(PTE_ATTRINDX(MT_NORMAL) | SWAPPER_PTE_FLAGS)
 #endif
 
+/*
+ * To make optimal use of block mappings when laying out the linear
+ * mapping, round down the base of physical memory to a size that can
+ * be mapped efficiently, i.e., either PUD_SIZE (4k granule) or PMD_SIZE
+ * (64k granule), or a multiple that can be mapped using contiguous bits
+ * in the page tables: 32 * PMD_SIZE (16k granule)
+ */
+#if defined(CONFIG_ARM64_4K_PAGES)
+#define ARM64_MEMSTART_SHIFT		PUD_SHIFT
+#elif defined(CONFIG_ARM64_16K_PAGES)
+#define ARM64_MEMSTART_SHIFT		(PMD_SHIFT + 5)
+#else
+#define ARM64_MEMSTART_SHIFT		PMD_SHIFT
+#endif
+
+/*
+ * sparsemem vmemmap imposes an additional requirement on the alignment of
+ * memstart_addr, due to the fact that the base of the vmemmap region
+ * has a direct correspondence, and needs to appear sufficiently aligned
+ * in the virtual address space.
+ */
+#if defined(CONFIG_SPARSEMEM_VMEMMAP) && ARM64_MEMSTART_SHIFT < SECTION_SIZE_BITS
+#define ARM64_MEMSTART_ALIGN	(1UL << SECTION_SIZE_BITS)
+#else
+#define ARM64_MEMSTART_ALIGN	(1UL << ARM64_MEMSTART_SHIFT)
+#endif
 
 #endif	/* __ASM_KERNEL_PGTABLE_H */

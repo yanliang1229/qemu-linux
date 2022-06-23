@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_ARM_CMPXCHG_H
 #define __ASM_ARM_CMPXCHG_H
 
@@ -105,8 +106,10 @@ static inline unsigned long __xchg(unsigned long x, volatile void *ptr, int size
 		break;
 #endif
 	default:
+#ifndef CONFIG_BUILD_KERNEL_WITH_O0
 		/* Cause a link-time error, the xchg() size is not supported */
 		__bad_xchg(ptr, size), ret = 0;
+#endif
 		break;
 	}
 
@@ -199,7 +202,9 @@ static inline unsigned long __cmpxchg(volatile void *ptr, unsigned long old,
 		} while (res);
 		break;
 	default:
+#ifndef CONFIG_BUILD_KERNEL_WITH_O0
 		__bad_cmpxchg(ptr, size);
+#endif
 		oldval = 0;
 	}
 

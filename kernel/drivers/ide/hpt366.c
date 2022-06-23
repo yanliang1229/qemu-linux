@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 1999-2003		Andre Hedrick <andre@linux-ide.org>
  * Portions Copyright (C) 2001	        Sun Microsystems, Inc.
@@ -12,7 +13,7 @@
  *
  *
  * HighPoint has its own drivers (open source except for the RAID part)
- * available from http://www.highpoint-tech.com/USA_new/service_support.htm
+ * available from http://www.highpoint-tech.com/USA_new/service_support.htm 
  * This may be useful to anyone wanting to work on this driver, however  do not
  * trust  them too much since the code tends to become less and less meaningful
  * as the time passes... :-/
@@ -20,10 +21,10 @@
  * Note that final HPT370 support was done by force extraction of GPL.
  *
  * - add function for getting/setting power status of drive
- * - the HPT370's state machine can get confused. reset it before each dma
+ * - the HPT370's state machine can get confused. reset it before each dma 
  *   xfer to prevent that from happening.
  * - reset state engine whenever we get an error.
- * - check for busmaster state at end of dma.
+ * - check for busmaster state at end of dma. 
  * - use new highpoint timings.
  * - detect bus speed using highpoint register.
  * - use pll if we don't have a clock table. added a 66MHz table that's
@@ -43,7 +44,7 @@
  * fixup /proc output for multiple controllers
  *	Tim Hockin <thockin@sun.com>
  *
- * On hpt366:
+ * On hpt366: 
  * Reset the hpt366 on error, reset on dma
  * Fix disabling Fast Interrupt hpt366.
  * 	Mike Waychison <crlf@sun.com>
@@ -51,7 +52,7 @@
  * Added support for 372N clocking and clock switching. The 372N needs
  * different clocks on read/write. This requires overloading rw_disk and
  * other deeply crazy things. Thanks to <http://www.hoerstreich.de> for
- * keeping me sane.
+ * keeping me sane. 
  *		Alan Cox <alan@lxorguk.ukuu.org.uk>
  *
  * - fix the clock turnaround code: it was writing to the wrong ports when
@@ -130,7 +131,7 @@
 #include <linux/ide.h>
 #include <linux/slab.h>
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/io.h>
 
 #define DRV_NAME "hpt366"
@@ -531,14 +532,9 @@ static const struct hpt_info hpt371n = {
 	.timings	= &hpt37x_timings
 };
 
-static int check_in_drive_list(ide_drive_t *drive, const char **list)
+static bool check_in_drive_list(ide_drive_t *drive, const char **list)
 {
-	char *m = (char *)&drive->id[ATA_ID_PROD];
-
-	while (*list)
-		if (!strcmp(*list++, m))
-			return 1;
-	return 0;
+	return match_string(list, -1, (char *)&drive->id[ATA_ID_PROD]) >= 0;
 }
 
 static struct hpt_info *hpt3xx_get_info(struct device *dev)
@@ -579,13 +575,14 @@ static u8 hpt3xx_udma_filter(ide_drive_t *drive)
 		if (!HPT370_ALLOW_ATA100_5 ||
 		    check_in_drive_list(drive, bad_ata100_5))
 			return ATA_UDMA4;
+		/* fall through */
 	case HPT372 :
 	case HPT372A:
 	case HPT372N:
 	case HPT374 :
 		if (ata_id_is_sata(drive->id))
 			mask &= ~0x0e;
-		/* Fall thru */
+		/* fall through */
 	default:
 		return mask;
 	}
@@ -605,7 +602,7 @@ static u8 hpt3xx_mdma_filter(ide_drive_t *drive)
 	case HPT374 :
 		if (ata_id_is_sata(drive->id))
 			return 0x00;
-		/* Fall thru */
+		/* fall through */
 	default:
 		return 0x07;
 	}
@@ -1017,7 +1014,7 @@ static int init_chipset_hpt366(struct pci_dev *dev)
 		pci_read_config_dword(dev, 0x40, &itr1);
 
 		/* Detect PCI clock by looking at cmd_high_time. */
-		switch((itr1 >> 8) & 0x07) {
+		switch ((itr1 >> 8) & 0x0f) {
 			case 0x09:
 				pci_clk = 40;
 				break;
@@ -1241,7 +1238,7 @@ static int init_dma_hpt366(ide_hwif_t *hwif,
 
 	dma_old = inb(base + 2);
 
-	local_irq_save_nort(flags);
+	local_irq_save(flags);
 
 	dma_new = dma_old;
 	pci_read_config_byte(dev, hwif->channel ? 0x4b : 0x43, &masterdma);
@@ -1252,7 +1249,7 @@ static int init_dma_hpt366(ide_hwif_t *hwif,
 	if (dma_new != dma_old)
 		outb(dma_new, base + 2);
 
-	local_irq_restore_nort(flags);
+	local_irq_restore(flags);
 
 	printk(KERN_INFO "    %s: BM-DMA at 0x%04lx-0x%04lx\n",
 			 hwif->name, base, base + 7);
@@ -1460,7 +1457,7 @@ static int hpt366_init_one(struct pci_dev *dev, const struct pci_device_id *id)
 	if (info == &hpt36x || info == &hpt374)
 		dev2 = pci_get_slot(dev->bus, dev->devfn + 1);
 
-	dyn_info = kzalloc(sizeof(*dyn_info) * (dev2 ? 2 : 1), GFP_KERNEL);
+	dyn_info = kcalloc(dev2 ? 2 : 1, sizeof(*dyn_info), GFP_KERNEL);
 	if (dyn_info == NULL) {
 		printk(KERN_ERR "%s %s: out of memory!\n",
 			d.name, pci_name(dev));

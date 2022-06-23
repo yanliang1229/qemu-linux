@@ -1,0 +1,6 @@
+config PER_CPU_TEST
+	tristate "Per-CPU test case"
+	default m
+	help
+           Per-cpu test case
+

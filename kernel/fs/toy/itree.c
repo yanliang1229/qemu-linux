@@ -1,82 +1,77 @@
+// SPDX-License-Identifier: GPL-2.0
+#include <linux/buffer_head.h>
 #include <linux/slab.h>
 #include "toy.h"
 
-
-static inline unsigned long block_to_cpu(block_t n)
+static unsigned long block_to_cpu(block_t n)
 {
 	return n;
 }
 
-static inline block_t cpu_to_block(unsigned long n)
+static block_t cpu_to_block(unsigned long n)
 {
 	return n;
 }
 
-static inline block_t *i_data(struct inode *inode)
+static block_t *i_data(struct inode *inode)
 {
 	return (block_t *)toy_i(inode)->data;
 }
 
 /**
- * @block: 文件数据块号(相对)
- * @offsets[]:保存查找block块号的路径信息
+ * @block: 文件逻辑块号
  */
 static int block_to_path(struct inode * inode, long block, int offsets[DEPTH])
 {
 	int n = 0;
-	char b[BDEVNAME_SIZE];
 
 	if (block < 0) {
-		printk("TOY-fs: block_to_path: block %ld < 0 on dev %s\n",
-			block, bdevname(inode->i_sb->s_bdev, b));
+		printk("TOY-fs: block_to_path: block %ld < 0 on dev %pg\n",
+			block, inode->i_sb->s_bdev);
 	} else if (block >= (toy_sb(inode->i_sb)->s_max_size/BLOCK_SIZE)) {
 		if (printk_ratelimit())
 			printk("TOY-fs: block_to_path: "
-			       "block %ld too big on dev %s\n",
-				block, bdevname(inode->i_sb->s_bdev, b));
-	} else if (block < 7) {			/* 直接块 */
+			       "block %ld too big on dev %pg\n",
+				block, inode->i_sb->s_bdev);
+	} else if (block < 7) {
 		offsets[n++] = block;
-	} else if ((block -= 7) < 512) {	/* 一级间接块 */
-		offsets[n++] = 7;
-		offsets[n++] = block;
-	} else {				/* 二级间接块 */
+	} else if ((block -= 7) < 512) {
+		offsets[n++] = 7;		/* 指向一次间接块 */
+		offsets[n++] = block;		/* 在一次间接块(512个块)内的相对块号 */
+	} else {
 		block -= 512;
-		offsets[n++] = 8;
-		offsets[n++] = block>>9;
-		offsets[n++] = block & 511;
+		offsets[n++] = 8;		/* 指向二次间接块的第一级块号 */
+		offsets[n++] = block>>9;	/* 指向二次间接块的第二级块号 */
+		offsets[n++] = block & 511;	/* 指向二次间接块的块内相对块号 */
 	}
-	/* 查找block块号需要遍历的层级 */
+	/**
+	 * 返回需要遍历的层级
+	 */
 	return n;
 }
 
 static DEFINE_RWLOCK(pointers_lock);
 
-static inline void add_chain(Indirect *p, struct buffer_head *bh, block_t *v)
+static void add_chain(Indirect *p, struct buffer_head *bh, block_t *v)
 {
-	/* 保存文件系统真实块号的内存地址 */
 	p->p = v;
-	/* 文件系统的块号 */
 	p->key = *v;
 	p->bh = bh;
 }
 
-static inline int verify_chain(Indirect *from, Indirect *to)
+static int verify_chain(Indirect *from, Indirect *to)
 {
 	while (from <= to && from->key == *from->p)
 		from++;
 	return (from > to);
 }
 
-static inline block_t *block_end(struct buffer_head *bh)
+static block_t *block_end(struct buffer_head *bh)
 {
 	return (block_t *)((char*)bh->b_data + bh->b_size);
 }
 
-/**
- * get_branch：读取offsets数组文件逻辑块号指定的真实数据块，保存在chain中
- *offsets：保存文件数据块的逻辑块号(从0开始编号)
- */
-static inline Indirect *get_branch(struct inode *inode,
+static Indirect *get_branch(struct inode *inode,
 					int depth,
 					int *offsets,
 					Indirect chain[DEPTH],
@@ -87,27 +82,19 @@ static inline Indirect *get_branch(struct inode *inode,
 	struct buffer_head *bh;
 
 	*err = 0;
-	/**
-	 * i_data is not going away, no lock needed
-	 * i_data(inode) + *offsets：获得实际的文件系统中的数据块号(绝对)
-	 */
+	/* i_data is not going away, no lock needed */
 	add_chain(chain, NULL, i_data(inode) + *offsets);
 	if (!p->key)
 		goto no_block;
 	while (--depth) {
-		/* 读取p->key指定的文件块数据(绝对块号) */
 		bh = sb_bread(sb, block_to_cpu(p->key));
 		if (!bh)
 			goto failure;
 		read_lock(&pointers_lock);
 		if (!verify_chain(chain, p))
 			goto changed;
-		/**
-		 * bh->data + *++offsets:转换为整个文件系统的绝对块号
-		 */
 		add_chain(++p, bh, (block_t *)bh->b_data + *++offsets);
 		read_unlock(&pointers_lock);
-		/* 文件数据块不存在 */
 		if (!p->key)
 			goto no_block;
 	}
@@ -124,30 +111,40 @@ no_block:
 	return p;
 }
 
-static int alloc_branch(struct inode *inode,
-			     int num,
-			     int *offsets,
-			     Indirect *branch)
+/**
+ * @num: 需要申请数据块个数
+ */
+static int alloc_branch(struct inode *inode, int num, int *offsets,
+	Indirect *branch)
 {
 	int n = 0;
 	int i;
+	/* 申请一个空闲数据块 */
 	int parent = toy_new_block(inode);
 
 	branch[0].key = cpu_to_block(parent);
 	if (parent) for (n = 1; n < num; n++) {
 		struct buffer_head *bh;
-		/* Allocate the next block */
+		/**
+		 * Allocate the next block
+		 * 申请一个空闲的数据块
+		 */
 		int nr = toy_new_block(inode);
 		if (!nr)
 			break;
+		/* 保存数据块块号 */
 		branch[n].key = cpu_to_block(nr);
+		/* 读取parent数据块的内容 */
 		bh = sb_getblk(inode->i_sb, parent);
 		lock_buffer(bh);
-		memset(bh->b_data, 0, bh->b_size);
 		branch[n].bh = bh;
+		/**
+		 * 计算出offsets[n]指定的逻辑块号在磁盘上数据块中的位置
+		 */
+		memset(bh->b_data, 0, bh->b_size);
 		branch[n].p = (block_t*) bh->b_data + offsets[n];
 		/**
-		 * p保存实际文件系统数据块号
+		 * 保存从磁盘上获取的数据块号
 		 */
 		*branch[n].p = branch[n].key;
 		set_buffer_uptodate(bh);
@@ -163,10 +160,11 @@ static int alloc_branch(struct inode *inode,
 		bforget(branch[i].bh);
 	for (i = 0; i < n; i++)
 		toy_free_block(inode, block_to_cpu(branch[i].key));
+
 	return -ENOSPC;
 }
 
-static inline int splice_branch(struct inode *inode,
+static int splice_branch(struct inode *inode,
 				     Indirect chain[DEPTH],
 				     Indirect *where,
 				     int num)
@@ -185,13 +183,14 @@ static inline int splice_branch(struct inode *inode,
 
 	/* We are done with atomic stuff, now do the rest of housekeeping */
 
-	inode->i_ctime = CURRENT_TIME_SEC;
+	inode->i_ctime = current_time(inode);
 
 	/* had we spliced it onto indirect block? */
 	if (where->bh)
 		mark_buffer_dirty_inode(where->bh, inode);
 
 	mark_inode_dirty(inode);
+
 	return 0;
 
 changed:
@@ -200,11 +199,97 @@ changed:
 		bforget(where[i].bh);
 	for (i = 0; i < num; i++)
 		toy_free_block(inode, block_to_cpu(where[i].key));
+
 	return -EAGAIN;
 }
 
+static int all_zeroes(block_t *p, block_t *q)
+{
+	while (p < q)
+		if (*p++)
+			return 0;
+	return 1;
+}
+
+static Indirect *find_shared(struct inode *inode,
+				int depth,
+				int offsets[DEPTH],
+				Indirect chain[DEPTH],
+				block_t *top)
+{
+	Indirect *partial, *p;
+	int k, err;
+
+	*top = 0;
+	for (k = depth; k > 1 && !offsets[k-1]; k--)
+		;
+	partial = get_branch(inode, k, offsets, chain, &err);
+
+	write_lock(&pointers_lock);
+	if (!partial)
+		partial = chain + k-1;
+	if (!partial->key && *partial->p) {
+		write_unlock(&pointers_lock);
+		goto no_top;
+	}
+	for (p = partial; p > chain && all_zeroes((block_t*)p->bh->b_data,p->p); p--)
+		;
+	if (p == chain + k - 1 && p > chain) {
+		p->p--;
+	} else {
+		*top = *p->p;
+		*p->p = 0;
+	}
+	write_unlock(&pointers_lock);
+
+	while(partial > p)
+	{
+		brelse(partial->bh);
+		partial--;
+	}
+no_top:
+	return partial;
+}
+
+static void free_data(struct inode *inode, block_t *p, block_t *q)
+{
+	unsigned long nr;
+
+	for ( ; p < q ; p++) {
+		nr = block_to_cpu(*p);
+		if (nr) {
+			*p = 0;
+			toy_free_block(inode, nr);
+		}
+	}
+}
+
+static void free_branches(struct inode *inode, block_t *p, block_t *q, int depth)
+{
+	struct buffer_head * bh;
+	unsigned long nr;
+
+	if (depth--) {
+		for ( ; p < q ; p++) {
+			nr = block_to_cpu(*p);
+			if (!nr)
+				continue;
+			*p = 0;
+			bh = sb_bread(inode->i_sb, nr);
+			if (!bh)
+				continue;
+			free_branches(inode, (block_t*)bh->b_data,
+				      block_end(bh), depth);
+			bforget(bh);
+			toy_free_block(inode, nr);
+			mark_inode_dirty(inode);
+		}
+	} else
+		free_data(inode, p, q);
+}
+
 /**
- * @block:文件逻辑数据块号(从0开始)
+ * @block: 文件内相对块号
  */
 int toy_get_block(struct inode * inode, sector_t block,
 			struct buffer_head *bh, int create)
@@ -225,11 +310,9 @@ reread:
 	/* Simplest case - block found, no allocation needed */
 	if (!partial) {
 got_it:
-		/* 读取到了block文件逻辑数据块号对应的文件真实物理块号的内容 */
 		map_bh(bh, inode->i_sb, block_to_cpu(chain[depth-1].key));
 		/* Clean up and exit */
 		partial = chain+depth-1; /* the whole chain */
-		/* 清理掉多余读取的文件数据块 */
 		goto cleanup;
 	}
 
@@ -271,95 +354,7 @@ changed:
 	goto reread;
 }
 
-static inline int all_zeroes(block_t *p, block_t *q)
-{
-	while (p < q)
-		if (*p++)
-			return 0;
-	return 1;
-}
-
-static Indirect *find_shared(struct inode *inode,
-				int depth,
-				int offsets[DEPTH],
-				Indirect chain[DEPTH],
-				block_t *top)
-{
-	Indirect *partial, *p;
-	int k, err;
-
-	*top = 0;
-	for (k = depth; k > 1 && !offsets[k-1]; k--)
-		;
-	partial = get_branch(inode, k, offsets, chain, &err);
-
-	write_lock(&pointers_lock);
-	if (!partial)
-		partial = chain + k-1;
-	if (!partial->key && *partial->p) {
-		write_unlock(&pointers_lock);
-		goto no_top;
-	}
-	p = partial;
-	while (p > chain) {
-		all_zeroes((block_t*)p->bh->b_data, p->p);
-		p--;
-	}
-
-	if (p == chain + k - 1 && p > chain) {
-		p->p--;
-	} else {
-		*top = *p->p;
-		*p->p = 0;
-	}
-	write_unlock(&pointers_lock);
-
-	while(partial > p) {
-		brelse(partial->bh);
-		partial--;
-	}
-no_top:
-	return partial;
-}
-
-static inline void free_data(struct inode *inode, block_t *p, block_t *q)
-{
-	unsigned long nr;
-
-	for ( ; p < q ; p++) {
-		nr = block_to_cpu(*p);
-		if (nr) {
-			*p = 0;
-			toy_free_block(inode, nr);
-		}
-	}
-}
-
-static void free_branches(struct inode *inode, block_t *p, block_t *q, int depth)
-{
-	struct buffer_head * bh;
-	unsigned long nr;
-
-	if (depth--) {
-		for ( ; p < q ; p++) {
-			nr = block_to_cpu(*p);
-			if (!nr)
-				continue;
-			*p = 0;
-			bh = sb_bread(inode->i_sb, nr);
-			if (!bh)
-				continue;
-			free_branches(inode, (block_t*)bh->b_data,
-				      block_end(bh), depth);
-			bforget(bh);
-			toy_free_block(inode, nr);
-			mark_inode_dirty(inode);
-		}
-	} else
-		free_data(inode, p, q);
-}
-
-void toy_truncate(struct inode * inode)
+static void _truncate(struct inode * inode)
 {
 	struct super_block *sb = inode->i_sb;
 	block_t *idata = i_data(inode);
@@ -370,9 +365,6 @@ void toy_truncate(struct inode * inode)
 	int n;
 	int first_whole;
 	long iblock;
-
-	if (!(S_ISREG(inode->i_mode) || S_ISDIR(inode->i_mode) || S_ISLNK(inode->i_mode)))
-		return;
 
 	iblock = (inode->i_size + sb->s_blocksize -1) >> sb->s_blocksize_bits;
 	block_truncate_page(inode->i_mapping, inode->i_size, toy_get_block);
@@ -415,27 +407,14 @@ do_indirects:
 		}
 		first_whole++;
 	}
-	inode->i_mtime = inode->i_ctime = CURRENT_TIME_SEC;
+	inode->i_mtime = inode->i_ctime = current_time(inode);
 	mark_inode_dirty(inode);
 }
 
-static inline unsigned nblocks(loff_t size, struct super_block *sb)
+void toy_truncate(struct inode * inode)
 {
-	int k = sb->s_blocksize_bits - 10;
-	unsigned blocks, res, direct = DIRECT, i = DEPTH;
-	blocks = (size + sb->s_blocksize - 1) >> (BLOCK_SIZE_BITS + k);
-	res = blocks;
-	while (--i && blocks > direct) {
-		blocks -= direct;
-		blocks += sb->s_blocksize/sizeof(block_t) - 1;
-		blocks /= sb->s_blocksize/sizeof(block_t);
-		res += blocks;
-		direct = 1;
-	}
-	return res;
-}
+	if (!(S_ISREG(inode->i_mode) || S_ISDIR(inode->i_mode) || S_ISLNK(inode->i_mode)))
+		return;
 
-unsigned toy_blocks(loff_t size, struct super_block *sb)
-{
-	return nblocks(size, sb);
+	_truncate(inode);
 }

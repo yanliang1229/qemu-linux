@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- *  linux/drivers/mmc/host/mmci.c - ARM PrimeCell MMCI PL180/1 driver
+ *  linux/drivers/mmc/host/pl181-pio.c - ARM PrimeCell pl181 driver
  *
  *  Copyright (C) 2003 Deep Blue Solutions, Ltd, All Rights Reserved.
  *  Copyright (C) 2010 ST-Ericsson SA
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -21,6 +18,7 @@
 #include <linux/err.h>
 #include <linux/highmem.h>
 #include <linux/log2.h>
+#include <linux/mmc/mmc.h>
 #include <linux/mmc/pm.h>
 #include <linux/mmc/host.h>
 #include <linux/mmc/card.h>
@@ -28,8 +26,7 @@
 #include <linux/amba/bus.h>
 #include <linux/clk.h>
 #include <linux/scatterlist.h>
-#include <linux/gpio.h>
-#include <linux/of_gpio.h>
+#include <linux/of.h>
 #include <linux/regulator/consumer.h>
 #include <linux/dmaengine.h>
 #include <linux/dma-mapping.h>
@@ -37,37 +34,20 @@
 #include <linux/pm_runtime.h>
 #include <linux/types.h>
 #include <linux/pinctrl/consumer.h>
+#include <linux/reset.h>
 
 #include <asm/div64.h>
 #include <asm/io.h>
-#include <asm/sizes.h>
 
 #include "pl181.h"
 
 #define DRIVER_NAME "pl181-pio"
 
+#define FIFISZIE	16 *4
+#define FIFIHALSIZE	8 * 4
+
 static unsigned int fmax = 515633;
 
-#define FIFOSIZE        16 * 4
-#define FIFOHALSIZE     8 * 4
-
-/*
- * Validate mmc prerequisites
- */
-static int pl181_validate_data(struct pl181_host *host,
-			      struct mmc_data *data)
-{
-	if (!data)
-		return 0;
-
-	if (!is_power_of_2(data->blksz)) {
-		dev_err(mmc_dev(host->mmc),
-			"unsupported block size (%d bytes)\n", data->blksz);
-		return -EINVAL;
-	}
-
-	return 0;
-}
 
 static void pl181_reg_delay(struct pl181_host *host)
 {
@@ -122,7 +102,7 @@ static void pl181_write_datactrlreg(struct pl181_host *host, u32 datactrl)
  */
 static void pl181_set_clkreg(struct pl181_host *host, unsigned int desired)
 {
-	u32 clk = 0;
+	u32 clk;
 
 	/* Make sure cclk reflects the current calculated clock */
 	host->cclk = 0;
@@ -141,7 +121,6 @@ static void pl181_set_clkreg(struct pl181_host *host, unsigned int desired)
 				clk = 255;
 			host->cclk = host->mclk / (2 * (clk + 1));
 		}
-
 		clk |= MCI_CLK_ENABLE;
 		/* This hasn't proven to be worthwhile */
 		/* clk |= MCI_CLK_PWRSAVE; */
@@ -156,6 +135,24 @@ static void pl181_set_clkreg(struct pl181_host *host, unsigned int desired)
 	pl181_write_clkreg(host, clk);
 }
 
+/*
+ * Validate mmc prerequisites
+ */
+static int pl181_validate_data(struct pl181_host *host,
+			      struct mmc_data *data)
+{
+	if (!data)
+		return 0;
+
+	if (!is_power_of_2(data->blksz)) {
+		dev_err(mmc_dev(host->mmc),
+			"unsupported block size (%d bytes)\n", data->blksz);
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static void
 pl181_request_end(struct pl181_host *host, struct mmc_request *mrq)
 {
@@ -167,16 +164,13 @@ pl181_request_end(struct pl181_host *host, struct mmc_request *mrq)
 	host->cmd = NULL;
 
 	mmc_request_done(host->mmc, mrq);
-
-	pm_runtime_mark_last_busy(mmc_dev(host->mmc));
-	pm_runtime_put_autosuspend(mmc_dev(host->mmc));
 }
 
 static void pl181_set_mask1(struct pl181_host *host, unsigned int mask)
 {
 	void __iomem *base = host->base;
-
 	writel(mask, base + MMCIMASK1);
+	host->mask1_reg = mask;
 }
 
 static void pl181_stop_data(struct pl181_host *host)
@@ -198,12 +192,21 @@ static void pl181_init_sg(struct pl181_host *host, struct mmc_data *data)
 	sg_miter_start(&host->sg_miter, data->sg, data->sg_len, flags);
 }
 
+static u32 pl181_dctrl_blksz(struct pl181_host *host)
+{
+	return (ffs(host->data->blksz) - 1) << 4;
+}
+
+static u32 pl181_get_dctrl_cfg(struct pl181_host *host)
+{
+	return MCI_DPSM_ENABLE | pl181_dctrl_blksz(host);
+}
+
 static void pl181_start_data(struct pl181_host *host, struct mmc_data *data)
 {
 	unsigned int datactrl, timeout, irqmask;
 	unsigned long long clks;
 	void __iomem *base;
-	int blksz_bits;
 
 	dev_dbg(mmc_dev(host->mmc), "blksz %04x blks %04x flags %08x\n",
 		data->blksz, data->blocks, data->flags);
@@ -221,17 +224,12 @@ static void pl181_start_data(struct pl181_host *host, struct mmc_data *data)
 	writel(timeout, base + MMCIDATATIMER);
 	writel(host->size, base + MMCIDATALENGTH);
 
-	blksz_bits = ffs(data->blksz) - 1;
-	BUG_ON(1 << blksz_bits != data->blksz);
+	datactrl = pl181_get_dctrl_cfg(host);
+	datactrl |= host->data->flags & MMC_DATA_READ ? MCI_DPSM_DIRECTION : 0;
 
-	datactrl = MCI_DPSM_ENABLE | blksz_bits << 4;
-
-	if (data->flags & MMC_DATA_READ)
-		datactrl |= MCI_DPSM_DIRECTION;
-
-	if (host->mmc->card && mmc_card_sdio(host->mmc->card))
+	if (host->mmc->card && mmc_card_sdio(host->mmc->card)) {
 		pl181_write_clkreg(host, host->clk_reg);
-
+	}
 
 	/* IRQ mode, map the SG list for CPU reading/writing */
 	pl181_init_sg(host, data);
@@ -244,7 +242,7 @@ static void pl181_start_data(struct pl181_host *host, struct mmc_data *data)
 		 * transfer, trigger a PIO interrupt as soon as any data
 		 * is available.
 		 */
-		if (host->size < FIFOHALSIZE)
+		if (host->size < FIFIHALSIZE)
 			irqmask |= MCI_RXDATAAVLBLMASK;
 	} else {
 		/*
@@ -253,9 +251,10 @@ static void pl181_start_data(struct pl181_host *host, struct mmc_data *data)
 		 */
 		irqmask = MCI_TXFIFOHALFEMPTYMASK;
 	}
-
+	/* 使能数据传输 */
 	pl181_write_datactrlreg(host, datactrl);
 	writel(readl(base + MMCIMASK0) & ~MCI_DATAENDMASK, base + MMCIMASK0);
+	/* 打开数据传输FIFO相关中断 */
 	pl181_set_mask1(host, irqmask);
 }
 
@@ -275,54 +274,86 @@ pl181_start_command(struct pl181_host *host, struct mmc_command *cmd, u32 c)
 	c |= cmd->opcode | MCI_CPSM_ENABLE;
 	if (cmd->flags & MMC_RSP_PRESENT) {
 		if (cmd->flags & MMC_RSP_136)
-			c |= MCI_CPSM_LONGRSP;
-		c |= MCI_CPSM_RESPONSE;
+			c |=  MCI_CPSM_RESPONSE | MCI_CPSM_LONGRSP;
+		else if (cmd->flags & MMC_RSP_CRC)
+			c |= MCI_CPSM_RESPONSE;
+		else
+			c |= MCI_CPSM_RESPONSE;
 	}
 
 	host->cmd = cmd;
-
+	/* 发送命令 */
 	writel(cmd->arg, base + MMCIARGUMENT);
 	writel(c, base + MMCICOMMAND);
+}
+
+static void pl181_stop_command(struct pl181_host *host)
+{
+	host->stop_abort.error = 0;
+	pl181_start_command(host, &host->stop_abort, 0);
+}
+
+static void pl181_request(struct mmc_host *mmc, struct mmc_request *mrq)
+{
+	struct pl181_host *host = mmc_priv(mmc);
+	unsigned long flags;
+
+	WARN_ON(host->mrq != NULL);
+
+	mrq->cmd->error = pl181_validate_data(host, mrq->data);
+	if (mrq->cmd->error) {
+		mmc_request_done(mmc, mrq);
+		return;
+	}
+
+	spin_lock_irqsave(&host->lock, flags);
+
+	host->mrq = mrq;
+
+	if (mrq->data && (mrq->data->flags & MMC_DATA_READ))
+		pl181_start_data(host, mrq->data);
+
+	if (mrq->sbc)
+		pl181_start_command(host, mrq->sbc, 0);
+	else
+		pl181_start_command(host, mrq->cmd, 0);
+
+	spin_unlock_irqrestore(&host->lock, flags);
 }
 
 static void
 pl181_data_irq(struct pl181_host *host, struct mmc_data *data,
 	      unsigned int status)
 {
+	unsigned int status_err;
+
 	/* Make sure we have data to handle */
 	if (!data)
 		return;
 
 	/* First check for errors */
-	if (status & (MCI_DATACRCFAIL|MCI_DATATIMEOUT|MCI_STARTBITERR|
-		      MCI_TXUNDERRUN|MCI_RXOVERRUN)) {
-		u32 remain, success;
+	status_err = status & (MCI_STARTBITERR |
+			       MCI_DATACRCFAIL | MCI_DATATIMEOUT |
+			       MCI_TXUNDERRUN | MCI_RXOVERRUN);
 
-		/*
-		 * Calculate how far we are into the transfer.  Note that
-		 * the data counter gives the number of bytes transferred
-		 * on the MMC bus, not on the host side.  On reads, this
-		 * can be as much as a FIFO-worth of data ahead.  This
-		 * matters for FIFO overruns only.
-		 */
-		remain = readl(host->base + MMCIDATACNT);
-		success = data->blksz * data->blocks - remain;
+	if (status_err) {
+		u32 remain, success = 0;
 
 		dev_dbg(mmc_dev(host->mmc), "MCI ERROR IRQ, status 0x%08x at 0x%08x\n",
-			status, success);
-		if (status & MCI_DATACRCFAIL) {
+			status_err, success);
+		if (status_err & MCI_DATACRCFAIL) {
 			/* Last block was not successful */
 			success -= 1;
 			data->error = -EILSEQ;
-		} else if (status & MCI_DATATIMEOUT) {
+		} else if (status_err & MCI_DATATIMEOUT) {
 			data->error = -ETIMEDOUT;
-		} else if (status & MCI_STARTBITERR) {
+		} else if (status_err & MCI_STARTBITERR) {
 			data->error = -ECOMM;
-		} else if (status & MCI_TXUNDERRUN) {
+		} else if (status_err & MCI_TXUNDERRUN) {
 			data->error = -EIO;
-		} else if (status & MCI_RXOVERRUN) {
-			if (success > FIFOSIZE)
-				success -= FIFOSIZE;
+		} else if (status_err & MCI_RXOVERRUN) {
+			if (success > FIFISZIE)
+				success -= FIFISZIE;
 			else
 				success = 0;
 			data->error = -EIO;
@@ -340,7 +371,9 @@ pl181_data_irq(struct pl181_host *host, struct mmc_data *data,
 			/* The error clause is handled above, success! */
 			data->bytes_xfered = data->blksz * data->blocks;
 
-		if (!data->stop || host->mrq->sbc) {
+		if (!data->stop) {
+			pl181_request_end(host, data->mrq);
+		} else if (host->mrq->sbc && !data->error) {
 			pl181_request_end(host, data->mrq);
 		} else {
 			pl181_start_command(host, data->stop, 0);
@@ -353,29 +386,29 @@ pl181_cmd_irq(struct pl181_host *host, struct mmc_command *cmd,
 	     unsigned int status)
 {
 	void __iomem *base = host->base;
-	bool sbc;
+	bool sbc, busy_resp;
 
 	if (!cmd)
 		return;
 
 	sbc = (cmd == host->mrq->sbc);
+	busy_resp = !!(cmd->flags & MMC_RSP_BUSY);
 
-	if (!((status|host->busy_status) & (MCI_CMDCRCFAIL|MCI_CMDTIMEOUT|
-		MCI_CMDSENT|MCI_CMDRESPEND)))
+	/*
+	 * We need to be one of these interrupts to be considered worth
+	 * handling. Note that we tag on any latent IRQs postponed
+	 * due to waiting for busy status.
+	 */
+	if (!((status|host->busy_status) &
+	      (MCI_CMDCRCFAIL|MCI_CMDTIMEOUT|MCI_CMDSENT|MCI_CMDRESPEND)))
 		return;
-
-	/* At busy completion, mask the IRQ and complete the request. */
-	if (host->busy_status) {
-		writel(readl(base + MMCIMASK0), base + MMCIMASK0);
-		host->busy_status = 0;
-	}
 
 	host->cmd = NULL;
 
 	if (status & MCI_CMDTIMEOUT) {
-		cmd->error = -ETIMEDOUT;
+		cmd->error = -ETIMEDOUT; /* 命令超时 */
 	} else if (status & MCI_CMDCRCFAIL && cmd->flags & MMC_RSP_CRC) {
-		cmd->error = -EILSEQ;
+		cmd->error = -EILSEQ; /* 命令响应错误 */
 	} else {
 		cmd->resp[0] = readl(base + MMCIRESPONSE0);
 		cmd->resp[1] = readl(base + MMCIRESPONSE1);
@@ -384,9 +417,8 @@ pl181_cmd_irq(struct pl181_host *host, struct mmc_command *cmd,
 	}
 
 	if ((!sbc && !cmd->data) || cmd->error) {
-		if (host->data) {
+		if (host->data)
 			pl181_stop_data(host);
-		}
 		pl181_request_end(host, host->mrq);
 	} else if (sbc) {
 		pl181_start_command(host, host->mrq->cmd, 0);
@@ -457,7 +489,7 @@ static int pl181_pio_write(struct pl181_host *host, char *buffer, unsigned int r
 		unsigned int count, maxcnt;
 
 		maxcnt = status & MCI_TXFIFOEMPTY ?
-			 FIFOSIZE : FIFOHALSIZE;
+			 FIFISZIE : FIFIHALSIZE;
 		count = min(remain, maxcnt);
 
 		/*
@@ -484,6 +516,7 @@ static int pl181_pio_write(struct pl181_host *host, char *buffer, unsigned int r
 
 /*
  * PIO data transfer IRQ handler.
+ * 处理数据传输中与FIFO操作相关的中断
  */
 static irqreturn_t pl181_pio_irq(int irq, void *dev_id)
 {
@@ -501,11 +534,9 @@ static irqreturn_t pl181_pio_irq(int irq, void *dev_id)
 		char *buffer;
 
 		/*
-		 * For write, we only need to test the half-empty flag
-		 * here - if the FIFO is completely empty, then by
-		 * definition it is more than half empty.
 		 *
 		 * For read, check for data available.
+		 * 检查fifo中是否有数据，如果没有，直接结束
 		 */
 		if (!(status & (MCI_TXFIFOHALFEMPTY|MCI_RXDATAAVLBL)))
 			break;
@@ -517,8 +548,10 @@ static irqreturn_t pl181_pio_irq(int irq, void *dev_id)
 		remain = sg_miter->length;
 
 		len = 0;
+		/* fifo中有可读的数据 */
 		if (status & MCI_RXACTIVE)
 			len = pl181_pio_read(host, buffer, remain);
+		/* fifo有中待发送的数据 */
 		if (status & MCI_TXACTIVE)
 			len = pl181_pio_write(host, buffer, remain, status);
 
@@ -539,7 +572,7 @@ static irqreturn_t pl181_pio_irq(int irq, void *dev_id)
 	 * If we have less than the fifo 'half-full' threshold to transfer,
 	 * trigger a PIO interrupt as soon as any data is available.
 	 */
-	if (status & MCI_RXACTIVE && host->size < FIFOHALSIZE)
+	if (status & MCI_RXACTIVE && host->size < FIFIHALSIZE)
 		pl181_set_mask1(host, MCI_RXDATAAVLBLMASK);
 
 	/*
@@ -558,6 +591,7 @@ static irqreturn_t pl181_pio_irq(int irq, void *dev_id)
 
 /*
  * Handle completion of command and data transfers.
+ * 处理命令传输和数据传输中断
  */
 static irqreturn_t pl181_irq(int irq, void *dev_id)
 {
@@ -569,61 +603,22 @@ static irqreturn_t pl181_irq(int irq, void *dev_id)
 
 	do {
 		status = readl(host->base + MMCISTATUS);
-
 		/*
-		 * We intentionally clear the MCI_ST_CARDBUSY IRQ here (if it's
-		 * enabled) since the HW seems to be triggering the IRQ on both
-		 * edges while monitoring DAT0 for busy completion.
+		 * Busy detection is managed by pl181_cmd_irq(), including to
+		 * clear the corresponding IRQ.
 		 */
 		status &= readl(host->base + MMCIMASK0);
 		writel(status, host->base + MMCICLEAR);
 
 		dev_dbg(mmc_dev(host->mmc), "irq0 (data+cmd) %08x\n", status);
-
 		pl181_data_irq(host, host->data, status);
 		pl181_cmd_irq(host, host->cmd, status);
-
-		// /* Don't poll for busy completion in irq context. */
-		// if (host->busy_status)
-		// 	status &= ~MCI_ST_CARDBUSY;
-
 		ret = 1;
 	} while (status);
 
 	spin_unlock(&host->lock);
 
 	return IRQ_RETVAL(ret);
-}
-
-static void pl181_request(struct mmc_host *mmc, struct mmc_request *mrq)
-{
-	struct pl181_host *host = mmc_priv(mmc);
-	unsigned long flags;
-
-	WARN_ON(host->mrq != NULL);
-
-	mrq->cmd->error = pl181_validate_data(host, mrq->data);
-	if (mrq->cmd->error) {
-		mmc_request_done(mmc, mrq);
-		return;
-	}
-
-	pm_runtime_get_sync(mmc_dev(mmc));
-
-	spin_lock_irqsave(&host->lock, flags);
-
-	host->mrq = mrq;
-
-
-	if (mrq->data && mrq->data->flags & MMC_DATA_READ)
-		pl181_start_data(host, mrq->data);
-
-	if (mrq->sbc)
-		pl181_start_command(host, mrq->sbc, 0);
-	else
-		pl181_start_command(host, mrq->cmd, 0);
-
-	spin_unlock_irqrestore(&host->lock, flags);
 }
 
 static void pl181_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
@@ -633,7 +628,9 @@ static void pl181_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	unsigned long flags;
 	int ret;
 
-	pm_runtime_get_sync(mmc_dev(mmc));
+	if (host->plat->ios_handler &&
+		host->plat->ios_handler(mmc_dev(mmc), ios))
+			dev_err(mmc_dev(mmc), "platform ios_handler failed\n");
 
 	switch (ios->power_mode) {
 	case MMC_POWER_OFF:
@@ -666,26 +663,16 @@ static void pl181_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		break;
 	}
 
-	if (ios->bus_mode == MMC_BUSMODE_OPENDRAIN) {
-		if (host->hw_designer != AMBA_VENDOR_ST)
-			pwr |= MCI_ROD;
-		else {
-			pwr |= MCI_OD;
-		}
-	}
-
-	host->clock_cache = ios->clock;
-
+	if (ios->bus_mode == MMC_BUSMODE_OPENDRAIN)
+		pwr |= MCI_ROD;
 	spin_lock_irqsave(&host->lock, flags);
-
 	pl181_set_clkreg(host, ios->clock);
+
 	pl181_write_pwrreg(host, pwr);
+
 	pl181_reg_delay(host);
 
 	spin_unlock_irqrestore(&host->lock, flags);
-
-	pm_runtime_mark_last_busy(mmc_dev(mmc));
-	pm_runtime_put_autosuspend(mmc_dev(mmc));
 }
 
 static int pl181_get_cd(struct mmc_host *mmc)
@@ -709,8 +696,6 @@ static int pl181_sig_volt_switch(struct mmc_host *mmc, struct mmc_ios *ios)
 
 	if (!IS_ERR(mmc->supply.vqmmc)) {
 
-		pm_runtime_get_sync(mmc_dev(mmc));
-
 		switch (ios->signal_voltage) {
 		case MMC_SIGNAL_VOLTAGE_330:
 			ret = regulator_set_voltage(mmc->supply.vqmmc,
@@ -728,9 +713,6 @@ static int pl181_sig_volt_switch(struct mmc_host *mmc, struct mmc_ios *ios)
 
 		if (ret)
 			dev_warn(mmc_dev(mmc), "Voltage switch failed\n");
-
-		pm_runtime_mark_last_busy(mmc_dev(mmc));
-		pm_runtime_put_autosuspend(mmc_dev(mmc));
 	}
 
 	return ret;
@@ -790,7 +772,6 @@ static int pl181_probe(struct amba_device *dev,
 
 	host = mmc_priv(mmc);
 	host->mmc = mmc;
-
 	host->hw_designer = amba_manf(dev);
 	host->hw_revision = amba_rev(dev);
 	dev_dbg(mmc_dev(mmc), "designer ID = 0x%02x\n", host->hw_designer);
@@ -844,9 +825,15 @@ static int pl181_probe(struct amba_device *dev,
 
 	dev_dbg(mmc_dev(mmc), "clocking block at %u Hz\n", mmc->f_max);
 
+	host->rst = devm_reset_control_get_optional_exclusive(&dev->dev, NULL);
+	if (IS_ERR(host->rst)) {
+		ret = PTR_ERR(host->rst);
+		goto clk_disable;
+	}
+
 	/* Get regulators and the supported OCR mask */
 	ret = mmc_regulator_get_supply(mmc);
-	if (ret == -EPROBE_DEFER)
+	if (ret)
 		goto clk_disable;
 
 	if (!mmc->ocr_avail)
@@ -856,6 +843,11 @@ static int pl181_probe(struct amba_device *dev,
 
 	/* We support these capabilities. */
 	mmc->caps |= MMC_CAP_CMD23;
+
+	/* Prepare a CMD12 - needed to clear the DPSM on some variants. */
+	host->stop_abort.opcode = MMC_STOP_TRANSMISSION;
+	host->stop_abort.arg = 0;
+	host->stop_abort.flags = MMC_RSP_R1B | MMC_CMD_AC;
 
 	mmc->ops = &pl181_ops;
 
@@ -902,19 +894,18 @@ static int pl181_probe(struct amba_device *dev,
 	if (ret)
 		goto clk_disable;
 
-	if (!dev->irq[1])
-                goto clk_disable;
-
-	ret = devm_request_irq(&dev->dev, dev->irq[1], pl181_pio_irq,
+	if (dev->irq[1]) {
+		ret = devm_request_irq(&dev->dev, dev->irq[1], pl181_pio_irq,
 				IRQF_SHARED, DRIVER_NAME " (pio)", host);
-	if (ret)
-		goto clk_disable;
+		if (ret)
+			goto clk_disable;
+	}
 
-	writel(MCI_IRQENABLE, host->base + MMCIMASK0);
+	writel(MCI_IRQENABLE | MCI_STARTBITERR, host->base + MMCIMASK0);
 
 	amba_set_drvdata(dev, mmc);
 
-	dev_info(&dev->dev, "%s: PL%03x manf %x rev%u at 0x%08llx irq %d,%d (pio)\n",
+	dev_info(&dev->dev, "%s: PL%03x manf %x rev%u at 0x%08llx irq %d,%d\n",
 		 mmc_hostname(mmc), amba_part(dev), amba_manf(dev),
 		 amba_rev(dev), (unsigned long long)dev->res.start,
 		 dev->irq[0], dev->irq[1]);
@@ -940,7 +931,6 @@ static int pl181_remove(struct amba_device *dev)
 
 	if (mmc) {
 		struct pl181_host *host = mmc_priv(mmc);
-
 		/*
 		 * Undo pm_runtime_put() in probe.  We use the _sync
 		 * version here so that we can access the primecell.
@@ -951,7 +941,6 @@ static int pl181_remove(struct amba_device *dev)
 
 		writel(0, host->base + MMCIMASK0);
 		writel(0, host->base + MMCIMASK1);
-
 		writel(0, host->base + MMCICOMMAND);
 		writel(0, host->base + MMCIDATACTRL);
 
@@ -970,7 +959,6 @@ static void pl181_save(struct pl181_host *host)
 	spin_lock_irqsave(&host->lock, flags);
 
 	writel(0, host->base + MMCIMASK0);
-
 	pl181_reg_delay(host);
 
 	spin_unlock_irqrestore(&host->lock, flags);
@@ -982,7 +970,8 @@ static void pl181_restore(struct pl181_host *host)
 
 	spin_lock_irqsave(&host->lock, flags);
 
-	writel(MCI_IRQENABLE, host->base + MMCIMASK0);
+	writel(MCI_IRQENABLE | MCI_STARTBITERR,
+	       host->base + MMCIMASK0);
 	pl181_reg_delay(host);
 
 	spin_unlock_irqrestore(&host->lock, flags);
@@ -1025,7 +1014,7 @@ static const struct dev_pm_ops pl181_dev_pm_ops = {
 	SET_RUNTIME_PM_OPS(pl181_runtime_suspend, pl181_runtime_resume, NULL)
 };
 
-static struct amba_id pl181_ids[] = {
+static const struct amba_id pl181_ids[] = {
 	{
 		.id	= 0x00041181,
 		.mask	= 0x000fffff,
@@ -1049,5 +1038,5 @@ module_amba_driver(pl181_driver);
 
 module_param(fmax, uint, 0444);
 
-MODULE_DESCRIPTION("ARM PrimeCell PL180/181 Multimedia Card Interface driver");
+MODULE_DESCRIPTION("ARM PrimeCell PL181 Multimedia Card Interface driver");
 MODULE_LICENSE("GPL");

@@ -1,11 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
- *  linux/drivers/mmc/host/mmci.h - ARM PrimeCell MMCI PL180/1 driver
+ *  linux/drivers/mmc/host/pl181.h - ARM PrimeCell MMCI PL181 driver
  *
  *  Copyright (C) 2003 Deep Blue Solutions, Ltd, All Rights Reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 #define MMCIPOWER		0x000
 #define MCI_PWR_OFF		0x00
@@ -22,19 +19,14 @@
 
 /* Modified PL180 on Versatile Express platform */
 #define MCI_ARM_HWFCEN		(1 << 12)
-
-
-/* select in latch data and command in */
-#define MCI_QCOM_CLK_SELECT_IN_FBCLK	BIT(15)
-#define MCI_QCOM_CLK_SELECT_IN_DDR_MODE	(BIT(14) | BIT(15))
-
 #define MMCIARGUMENT		0x008
+/* The command register controls the Command Path State Machine (CPSM) */
 #define MMCICOMMAND		0x00c
-#define MCI_CPSM_RESPONSE	(1 << 6)
-#define MCI_CPSM_LONGRSP	(1 << 7)
-#define MCI_CPSM_INTERRUPT	(1 << 8)
-#define MCI_CPSM_PENDING	(1 << 9)
-#define MCI_CPSM_ENABLE		(1 << 10)
+#define MCI_CPSM_RESPONSE	BIT(6)
+#define MCI_CPSM_LONGRSP	BIT(7)
+#define MCI_CPSM_INTERRUPT	BIT(8)
+#define MCI_CPSM_PENDING	BIT(9)
+#define MCI_CPSM_ENABLE		BIT(10)
 
 #define MMCIRESPCMD		0x010
 #define MMCIRESPONSE0		0x014
@@ -43,12 +35,14 @@
 #define MMCIRESPONSE3		0x020
 #define MMCIDATATIMER		0x024
 #define MMCIDATALENGTH		0x028
+
+/* The data control register controls the Data Path State Machine (DPSM) */
 #define MMCIDATACTRL		0x02c
-#define MCI_DPSM_ENABLE		(1 << 0)
-#define MCI_DPSM_DIRECTION	(1 << 1)
-#define MCI_DPSM_MODE		(1 << 2)
-#define MCI_DPSM_DMAENABLE	(1 << 3)
-#define MCI_DPSM_BLOCKSIZE	(1 << 4)
+#define MCI_DPSM_ENABLE		BIT(0)
+#define MCI_DPSM_DIRECTION	BIT(1)
+#define MCI_DPSM_MODE		BIT(2)
+#define MCI_DPSM_DMAENABLE	BIT(3)
+#define MCI_DPSM_BLOCKSIZE	BIT(4)
 
 #define MMCIDATACNT		0x030
 #define MMCISTATUS		0x034
@@ -116,50 +110,49 @@
 #define MMCIFIFOCNT		0x048
 #define MMCIFIFO		0x080 /* to 0x0bc */
 
+
 #define MCI_IRQENABLE	\
-	(MCI_CMDCRCFAILMASK|MCI_DATACRCFAILMASK|MCI_CMDTIMEOUTMASK|	\
-	MCI_DATATIMEOUTMASK|MCI_TXUNDERRUNMASK|MCI_RXOVERRUNMASK|	\
-	MCI_CMDRESPENDMASK|MCI_CMDSENTMASK|MCI_STARTBITERRMASK)
+	(MCI_CMDCRCFAILMASK | MCI_DATACRCFAILMASK | MCI_CMDTIMEOUTMASK | \
+	MCI_DATATIMEOUTMASK | MCI_TXUNDERRUNMASK | MCI_RXOVERRUNMASK |	\
+	MCI_CMDRESPENDMASK | MCI_CMDSENTMASK)
 
 /* These interrupts are directed to IRQ1 when two IRQ lines are available */
-#define MCI_IRQ1MASK \
+#define MCI_IRQ_PIO_MASK \
 	(MCI_RXFIFOHALFFULLMASK | MCI_RXDATAAVLBLMASK | \
 	 MCI_TXFIFOHALFEMPTYMASK)
 
 #define NR_SG		128
 
+#define MMCI_PINCTRL_STATE_OPENDRAIN "opendrain"
+
 struct clk;
 struct dma_chan;
-
-struct pl181_host_next {
-	struct dma_async_tx_descriptor	*dma_desc;
-	struct dma_chan			*dma_chan;
-	s32				cookie;
-};
+struct pl181_host;
 
 struct pl181_host {
 	phys_addr_t		phybase;
 	void __iomem		*base;
 	struct mmc_request	*mrq;
 	struct mmc_command	*cmd;
+	struct mmc_command	stop_abort;
 	struct mmc_data		*data;
 	struct mmc_host		*mmc;
 	struct clk		*clk;
-	bool			singleirq;
-
+	struct reset_control	*rst;
 	spinlock_t		lock;
-
 	unsigned int		mclk;
 	/* cached value of requested clk in set_ios */
-	unsigned int		clock_cache;
 	unsigned int		cclk;
 	u32			pwr_reg;
-	u32			pwr_reg_add;
 	u32			clk_reg;
 	u32			datactrl_reg;
 	u32			busy_status;
-	bool			vqmmc_enabled;
+	u32			mask1_reg;
+	u8			vqmmc_enabled:1;
 	struct pl181_platform_data *plat;
+	struct pinctrl		*pinctrl;
+	struct pinctrl_state	*pins_default;
+	struct pinctrl_state	*pins_opendrain;
 
 	u8			hw_designer;
 	u8			hw_revision:4;
@@ -171,17 +164,11 @@ struct pl181_host {
 	struct sg_mapping_iter	sg_miter;
 	unsigned int		size;
 
-#ifdef CONFIG_DMA_ENGINE
-	/* DMA stuff */
-	struct dma_chan		*dma_current;
-	struct dma_chan		*dma_rx_channel;
-	struct dma_chan		*dma_tx_channel;
-	struct dma_async_tx_descriptor	*dma_desc_current;
-	struct pl181_host_next	next_data;
+	u8			use_dma:1;
+	u8			dma_in_progress:1;
+	void			*dma_priv;
 
-#define dma_inprogress(host)	((host)->dma_current)
-#else
-#define dma_inprogress(host)	(0)
-#endif
+	s32			next_cookie;
 };
 
+#define dma_inprogress(host)	((host)->dma_in_progress)

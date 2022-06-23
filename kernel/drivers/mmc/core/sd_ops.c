@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  linux/drivers/mmc/core/sd_ops.h
  *
  *  Copyright 2006-2007 Pierre Ossman
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or (at
- * your option) any later version.
  */
 
 #include <linux/slab.h>
@@ -22,13 +18,21 @@
 #include "core.h"
 #include "sd_ops.h"
 
+/**
+ * CMD55 class 8
+ * 发送ACMD命令之前，必须发送APP_CMD指令
+ * 命令功能:
+ *   indicates to the card that the next command is an
+ *   application specific command rather than a standard
+ *   command
+ */
 int mmc_app_cmd(struct mmc_host *host, struct mmc_card *card)
 {
 	int err;
-	struct mmc_command cmd = {0};
+	struct mmc_command cmd = {};
 
-	BUG_ON(!host);
-	BUG_ON(card && (card->host != host));
+	if (WARN_ON(card && card->host != host))
+		return -EINVAL;
 
 	cmd.opcode = MMC_APP_CMD;
 
@@ -52,36 +56,18 @@ int mmc_app_cmd(struct mmc_host *host, struct mmc_card *card)
 }
 EXPORT_SYMBOL_GPL(mmc_app_cmd);
 
-/**
- *	mmc_wait_for_app_cmd - start an application command and wait for
- 			       completion
- *	@host: MMC host to start command
- *	@card: Card to send MMC_APP_CMD to
- *	@cmd: MMC command to start
- *	@retries: maximum number of retries
- *
- *	Sends a MMC_APP_CMD, checks the card response, sends the command
- *	in the parameter and waits for it to complete. Return any error
- *	that occurred while the command was executing.  Do not attempt to
- *	parse the response.
- */
-int mmc_wait_for_app_cmd(struct mmc_host *host, struct mmc_card *card,
-	struct mmc_command *cmd, int retries)
+static int mmc_wait_for_app_cmd(struct mmc_host *host, struct mmc_card *card,
+				struct mmc_command *cmd)
 {
-	struct mmc_request mrq = {NULL};
-
-	int i, err;
-
-	BUG_ON(!cmd);
-	BUG_ON(retries < 0);
-
-	err = -EIO;
+	struct mmc_request mrq = {};
+	int i, err = -EIO;
 
 	/*
 	 * We have to resend MMC_APP_CMD for each attempt so
 	 * we cannot use the retries field in mmc_command.
 	 */
-	for (i = 0;i <= retries;i++) {
+	for (i = 0; i <= MMC_CMD_RETRIES; i++) {
+		/* 发送ACMD命令之前，发送APP_CMD命令 */
 		err = mmc_app_cmd(host, card);
 		if (err) {
 			/* no point in retrying; no APP commands allowed */
@@ -116,15 +102,9 @@ int mmc_wait_for_app_cmd(struct mmc_host *host, struct mmc_card *card,
 	return err;
 }
 
-EXPORT_SYMBOL(mmc_wait_for_app_cmd);
-
 int mmc_app_set_bus_width(struct mmc_card *card, int width)
 {
-	int err;
-	struct mmc_command cmd = {0};
-
-	BUG_ON(!card);
-	BUG_ON(!card->host);
+	struct mmc_command cmd = {};
 
 	cmd.opcode = SD_APP_SET_BUS_WIDTH;
 	cmd.flags = MMC_RSP_R1 | MMC_CMD_AC;
@@ -140,19 +120,16 @@ int mmc_app_set_bus_width(struct mmc_card *card, int width)
 		return -EINVAL;
 	}
 
-	err = mmc_wait_for_app_cmd(card->host, card, &cmd, MMC_CMD_RETRIES);
-	if (err)
-		return err;
-
-	return 0;
+	return mmc_wait_for_app_cmd(card->host, card, &cmd);
 }
 
+/**
+ * 发送ACM41 获取OCR寄存器的值
+ */
 int mmc_send_app_op_cond(struct mmc_host *host, u32 ocr, u32 *rocr)
 {
-	struct mmc_command cmd = {0};
+	struct mmc_command cmd = {};
 	int i, err = 0;
-
-	BUG_ON(!host);
 
 	cmd.opcode = SD_APP_OP_COND;
 	if (mmc_host_is_spi(host))
@@ -162,7 +139,7 @@ int mmc_send_app_op_cond(struct mmc_host *host, u32 ocr, u32 *rocr)
 	cmd.flags = MMC_RSP_SPI_R1 | MMC_RSP_R3 | MMC_CMD_BCR;
 
 	for (i = 100; i; i--) {
-		err = mmc_wait_for_app_cmd(host, NULL, &cmd, MMC_CMD_RETRIES);
+		err = mmc_wait_for_app_cmd(host, NULL, &cmd);
 		if (err)
 			break;
 
@@ -193,9 +170,17 @@ int mmc_send_app_op_cond(struct mmc_host *host, u32 ocr, u32 *rocr)
 	return err;
 }
 
+/**
+ * CMD8 SEND_IF_COND
+ * 功能:
+ *  Sends SD Memory Card interface condition
+ *  which includes host supply voltage information
+ *  and asks the card whether card supports voltage.
+ *  Reserved bits shall be set to '0
+ */
 int mmc_send_if_cond(struct mmc_host *host, u32 ocr)
 {
-	struct mmc_command cmd = {0};
+	struct mmc_command cmd = {};
 	int err;
 	static const u8 test_pattern = 0xAA;
 	u8 result_pattern;
@@ -224,13 +209,13 @@ int mmc_send_if_cond(struct mmc_host *host, u32 ocr)
 	return 0;
 }
 
+/**
+ * Ask the card to publish a new relative address (RCA)
+ */
 int mmc_send_relative_addr(struct mmc_host *host, unsigned int *rca)
 {
 	int err;
-	struct mmc_command cmd = {0};
-
-	BUG_ON(!host);
-	BUG_ON(!rca);
+	struct mmc_command cmd = {};
 
 	cmd.opcode = SD_SEND_RELATIVE_ADDR;
 	cmd.arg = 0;
@@ -245,18 +230,18 @@ int mmc_send_relative_addr(struct mmc_host *host, unsigned int *rca)
 	return 0;
 }
 
-int mmc_app_send_scr(struct mmc_card *card, u32 *scr)
+/**
+ * Read the SD Configuration Register
+ * ACMD51
+ */
+int mmc_app_send_scr(struct mmc_card *card)
 {
 	int err;
-	struct mmc_request mrq = {NULL};
-	struct mmc_command cmd = {0};
-	struct mmc_data data = {0};
+	struct mmc_request mrq = {};
+	struct mmc_command cmd = {};
+	struct mmc_data data = {};
 	struct scatterlist sg;
-	void *data_buf;
-
-	BUG_ON(!card);
-	BUG_ON(!card->host);
-	BUG_ON(!scr);
+	__be32 *scr;
 
 	/* NOTE: caller guarantees scr is heap-allocated */
 
@@ -267,8 +252,8 @@ int mmc_app_send_scr(struct mmc_card *card, u32 *scr)
 	/* dma onto stack is unsafe/nonportable, but callers to this
 	 * routine normally provide temporary on-stack buffers ...
 	 */
-	data_buf = kmalloc(sizeof(card->raw_scr), GFP_KERNEL);
-	if (data_buf == NULL)
+	scr = kmalloc(sizeof(card->raw_scr), GFP_KERNEL);
+	if (!scr)
 		return -ENOMEM;
 
 	mrq.cmd = &cmd;
@@ -278,42 +263,43 @@ int mmc_app_send_scr(struct mmc_card *card, u32 *scr)
 	cmd.arg = 0;
 	cmd.flags = MMC_RSP_SPI_R1 | MMC_RSP_R1 | MMC_CMD_ADTC;
 
+	/* the size of SCR register is 64 bits */
 	data.blksz = 8;
 	data.blocks = 1;
 	data.flags = MMC_DATA_READ;
 	data.sg = &sg;
 	data.sg_len = 1;
 
-	sg_init_one(&sg, data_buf, 8);
+	sg_init_one(&sg, scr, 8);
 
 	mmc_set_data_timeout(&data, card);
 
 	mmc_wait_for_req(card->host, &mrq);
 
-	memcpy(scr, data_buf, sizeof(card->raw_scr));
-	kfree(data_buf);
+	card->raw_scr[0] = be32_to_cpu(scr[0]);
+	card->raw_scr[1] = be32_to_cpu(scr[1]);
+
+	kfree(scr);
 
 	if (cmd.error)
 		return cmd.error;
 	if (data.error)
 		return data.error;
 
-	scr[0] = be32_to_cpu(scr[0]);
-	scr[1] = be32_to_cpu(scr[1]);
-
 	return 0;
 }
 
+/**
+ * Checks switchable function (mode 0)
+ * and switch card function (mode 1
+ */
 int mmc_sd_switch(struct mmc_card *card, int mode, int group,
 	u8 value, u8 *resp)
 {
-	struct mmc_request mrq = {NULL};
-	struct mmc_command cmd = {0};
-	struct mmc_data data = {0};
+	struct mmc_request mrq = {};
+	struct mmc_command cmd = {};
+	struct mmc_data data = {};
 	struct scatterlist sg;
-
-	BUG_ON(!card);
-	BUG_ON(!card->host);
 
 	/* NOTE: caller guarantees resp is heap-allocated */
 
@@ -349,17 +335,16 @@ int mmc_sd_switch(struct mmc_card *card, int mode, int group,
 	return 0;
 }
 
+/**
+ * Send the SD Status
+ */
 int mmc_app_sd_status(struct mmc_card *card, void *ssr)
 {
 	int err;
-	struct mmc_request mrq = {NULL};
-	struct mmc_command cmd = {0};
-	struct mmc_data data = {0};
+	struct mmc_request mrq = {};
+	struct mmc_command cmd = {};
+	struct mmc_data data = {};
 	struct scatterlist sg;
-
-	BUG_ON(!card);
-	BUG_ON(!card->host);
-	BUG_ON(!ssr);
 
 	/* NOTE: caller guarantees ssr is heap-allocated */
 

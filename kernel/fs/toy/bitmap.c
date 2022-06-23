@@ -1,16 +1,4 @@
-/*
- *  linux/fs/toy/bitmap.c
- *
- *  Copyright (C) 1991, 1992  Linus Torvalds
- */
-
-/*
- * Modified for 680x0 by Hamish Macdonald
- * Fixed for 680x0 by Andreas Schwab
- */
-
-/* bitmap.c contains the code that handles the inode and block bitmaps */
-
+// SPDX-License-Identifier: GPL-2.0
 #include "toy.h"
 #include <linux/buffer_head.h>
 #include <linux/bitops.h>
@@ -59,7 +47,7 @@ void toy_free_block(struct inode *inode, unsigned long block)
 	}
 	bh = sbi->s_zmap[zone];
 	spin_lock(&bitmap_lock);
-	if (!toy_test_and_clear_bit(bit, bh->b_data))
+	if (!test_and_clear_bit_le(bit, bh->b_data))
 		printk("toy_free_block (%s:%lu): bit already cleared\n",
 		       sb->s_id, block);
 	spin_unlock(&bitmap_lock);
@@ -68,11 +56,12 @@ void toy_free_block(struct inode *inode, unsigned long block)
 }
 
 /**
- * 从文件系统中找到一个空闲数据块，并返回其数据块号
+ * 从文件系统的数据区中申请一个空闲的数据块，并返回其块号
  */
 int toy_new_block(struct inode * inode)
 {
 	struct toy_sb_info *sbi = toy_sb(inode->i_sb);
+	/* 每个块可以表示的位数 */
 	int bits_per_zone = 8 * inode->i_sb->s_blocksize;
 	int i;
 
@@ -81,12 +70,16 @@ int toy_new_block(struct inode * inode)
 		int j;
 
 		spin_lock(&bitmap_lock);
-		j = toy_find_first_zero_bit(bh->b_data, bits_per_zone);
+		/* 找到第一个为0的位置 */
+		j = find_first_zero_bit_le(bh->b_data, bits_per_zone);
 		if (j < bits_per_zone) {
-			toy_set_bit(j, bh->b_data);
+			/* 设置位图已经被占用 */
+			set_bit_le(j, bh->b_data);
 			spin_unlock(&bitmap_lock);
 			mark_buffer_dirty(bh);
-			/* 转化为相对于整个文件系统的决定块号 */
+			/**
+			 * 相对数据块号转变为整个文件系统中的绝对块号
+			 */
 			j += i * bits_per_zone + sbi->s_firstdatazone-1;
 			if (j < sbi->s_firstdatazone || j >= sbi->s_nzones)
 				break;
@@ -130,13 +123,14 @@ toy_raw_inode(struct super_block *sb, ino_t ino, struct buffer_head **bh)
 	return p + ino % TOY_INODES_PER_BLOCK;
 }
 
-/* Clear the link count and mode of a deleted inode on disk. */
-
+/**
+ * Clear the link count and mode of a deleted inode on disk.
+ */
 static void toy_clear_inode(struct inode *inode)
 {
 	struct buffer_head *bh = NULL;
-	struct toy_inode *raw_inode;
 
+	struct toy_inode *raw_inode;
 	raw_inode = toy_raw_inode(inode->i_sb, inode->i_ino, &bh);
 	if (raw_inode) {
 		raw_inode->i_nlinks = 0;
@@ -173,7 +167,7 @@ void toy_free_inode(struct inode * inode)
 
 	bh = sbi->s_imap[ino];
 	spin_lock(&bitmap_lock);
-	if (!toy_test_and_clear_bit(bit, bh->b_data))
+	if (!test_and_clear_bit_le(bit, bh->b_data))
 		printk("toy_free_inode: bit %lu already cleared\n", bit);
 	spin_unlock(&bitmap_lock);
 	mark_buffer_dirty(bh);
@@ -185,6 +179,7 @@ struct inode *toy_new_inode(const struct inode *dir, umode_t mode, int *error)
 	struct toy_sb_info *sbi = toy_sb(sb);
 	struct inode *inode = new_inode(sb);
 	struct buffer_head * bh;
+	/* 单个文件块可以管理的位图 */
 	int bits_per_zone = 8 * sb->s_blocksize;
 	unsigned long j;
 	int i;
@@ -196,10 +191,13 @@ struct inode *toy_new_inode(const struct inode *dir, umode_t mode, int *error)
 	j = bits_per_zone;
 	bh = NULL;
 	*error = -ENOSPC;
+	/**
+	 * 从索引节点位图中找到一个空闲的索引节点
+	 */
 	spin_lock(&bitmap_lock);
 	for (i = 0; i < sbi->s_imap_blocks; i++) {
 		bh = sbi->s_imap[i];
-		j = toy_find_first_zero_bit(bh->b_data, bits_per_zone);
+		j = find_first_zero_bit_le(bh->b_data, bits_per_zone);
 		if (j < bits_per_zone)
 			break;
 	}
@@ -208,7 +206,7 @@ struct inode *toy_new_inode(const struct inode *dir, umode_t mode, int *error)
 		iput(inode);
 		return NULL;
 	}
-	if (toy_test_and_set_bit(j, bh->b_data)) {	/* shouldn't happen */
+	if (test_and_set_bit_le(j, bh->b_data)) {	/* shouldn't happen */
 		spin_unlock(&bitmap_lock);
 		printk("toy_new_inode: bit already set\n");
 		iput(inode);
@@ -222,8 +220,13 @@ struct inode *toy_new_inode(const struct inode *dir, umode_t mode, int *error)
 		return NULL;
 	}
 	inode_init_owner(inode, dir, mode);
+	/**
+	 * 索引节点号
+	 */
 	inode->i_ino = j;
-	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME_SEC;
+	inode->i_mtime = current_time(inode);
+	inode->i_atime = current_time(inode);
+	inode->i_ctime = current_time(inode);
 	inode->i_blocks = 0;
 	memset(&toy_i(inode)->data, 0, sizeof(toy_i(inode)->data));
 	insert_inode_hash(inode);

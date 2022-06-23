@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Copyright (C) 1994-1998   Linus Torvalds & authors (see below)
  *  Copyright (C) 2005, 2007  Bartlomiej Zolnierkiewicz
@@ -36,18 +37,18 @@
 
 #include <asm/byteorder.h>
 #include <asm/irq.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/io.h>
 
 /**
  *	generic_id		-	add a generic drive id
  *	@drive:	drive to make an ID block for
- *
+ *	
  *	Add a fake id field to the drive we are passed. This allows
- *	use to skip a ton of NULL checks (which people always miss)
+ *	use to skip a ton of NULL checks (which people always miss) 
  *	and make drive properties unconditional outside of this file
  */
-
+ 
 static void generic_id(ide_drive_t *drive)
 {
 	u16 *id = drive->id;
@@ -142,6 +143,7 @@ static void ide_classify_atapi_dev(ide_drive_t *drive)
 		}
 		/* Early cdrom models used zero */
 		type = ide_cdrom;
+		/* fall through */
 	case ide_cdrom:
 		drive->dev_flags |= IDE_DFLAG_REMOVABLE;
 #ifdef CONFIG_PPC
@@ -179,13 +181,13 @@ static void ide_classify_atapi_dev(ide_drive_t *drive)
 
 /**
  *	do_identify	-	identify a drive
- *	@drive: drive to identify
+ *	@drive: drive to identify 
  *	@cmd: command used
  *	@id: buffer for IDENTIFY data
  *
  *	Called when we have issued a drive identify command to
  *	read and parse the results. This function is run with
- *	interrupts disabled.
+ *	interrupts disabled. 
  */
 
 static void do_identify(ide_drive_t *drive, u8 cmd, u16 *id)
@@ -196,10 +198,10 @@ static void do_identify(ide_drive_t *drive, u8 cmd, u16 *id)
 	int bswap = 1;
 
 	/* local CPU only; some systems need this */
-	local_irq_save_nort(flags);
+	local_irq_save(flags);
 	/* read 512 bytes of id info */
 	hwif->tp_ops->input_data(drive, NULL, id, SECTOR_SIZE);
-	local_irq_restore_nort(flags);
+	local_irq_restore(flags);
 
 	drive->dev_flags |= IDE_DFLAG_ID_READ;
 #ifdef DEBUG
@@ -741,6 +743,20 @@ static void ide_port_tune_devices(ide_hwif_t *hwif)
 	}
 }
 
+static void ide_initialize_rq(struct request *rq)
+{
+	struct ide_request *req = blk_mq_rq_to_pdu(rq);
+
+	req->special = NULL;
+	scsi_req_init(&req->sreq);
+	req->sreq.sense = req->sense;
+}
+
+static const struct blk_mq_ops ide_mq_ops = {
+	.queue_rq		= ide_queue_rq,
+	.initialize_rq_fn	= ide_initialize_rq,
+};
+
 /*
  * init request queue
  */
@@ -750,6 +766,7 @@ static int ide_init_queue(ide_drive_t *drive)
 	ide_hwif_t *hwif = drive->hwif;
 	int max_sectors = 256;
 	int max_sg_entries = PRD_ENTRIES;
+	struct blk_mq_tag_set *set;
 
 	/*
 	 *	Our default set up assumes the normal IDE case,
@@ -759,9 +776,24 @@ static int ide_init_queue(ide_drive_t *drive)
 	 *	do not.
 	 */
 
-	q = blk_init_queue_node(do_ide_request, NULL, hwif_to_node(hwif));
-	if (!q)
+	set = &drive->tag_set;
+	set->ops = &ide_mq_ops;
+	set->nr_hw_queues = 1;
+	set->queue_depth = 32;
+	set->reserved_tags = 1;
+	set->cmd_size = sizeof(struct ide_request);
+	set->numa_node = hwif_to_node(hwif);
+	set->flags = BLK_MQ_F_SHOULD_MERGE | BLK_MQ_F_BLOCKING;
+	if (blk_mq_alloc_tag_set(set))
 		return 1;
+
+	q = blk_mq_init_queue(set);
+	if (IS_ERR(q)) {
+		blk_mq_free_tag_set(set);
+		return 1;
+	}
+
+	blk_queue_flag_set(QUEUE_FLAG_SCSI_PASSTHROUGH, q);
 
 	q->queuedata = drive;
 	blk_queue_segment_boundary(q, 0xffff);
@@ -780,17 +812,13 @@ static int ide_init_queue(ide_drive_t *drive)
 	 * This will be fixed once we teach pci_map_sg() about our boundary
 	 * requirements, hopefully soon. *FIXME*
 	 */
-	if (!PCI_DMA_BUS_IS_PHYS)
-		max_sg_entries >>= 1;
+	max_sg_entries >>= 1;
 #endif /* CONFIG_PCI */
 
 	blk_queue_max_segments(q, max_sg_entries);
 
 	/* assign drive queue */
 	drive->queue = q;
-
-	/* needs drive->queue to be set */
-	ide_toggle_bounce(drive, 1);
 
 	return 0;
 }
@@ -912,7 +940,7 @@ static int exact_lock(dev_t dev, void *data)
 {
 	struct gendisk *p = data;
 
-	if (!get_disk(p))
+	if (!get_disk_and_module(p))
 		return -1;
 	return 0;
 }
@@ -952,8 +980,12 @@ static void drive_release_dev (struct device *dev)
 
 	ide_proc_unregister_device(drive);
 
+	if (drive->sense_rq)
+		blk_mq_free_request(drive->sense_rq);
+
 	blk_cleanup_queue(drive->queue);
 	drive->queue = NULL;
+	blk_mq_free_tag_set(&drive->tag_set);
 
 	drive->dev_flags &= ~IDE_DFLAG_PRESENT;
 
@@ -973,15 +1005,16 @@ static int hwif_init(ide_hwif_t *hwif)
 	if (!hwif->sg_max_nents)
 		hwif->sg_max_nents = PRD_ENTRIES;
 
-	hwif->sg_table = kmalloc(sizeof(struct scatterlist)*hwif->sg_max_nents,
-				 GFP_KERNEL);
+	hwif->sg_table = kmalloc_array(hwif->sg_max_nents,
+				       sizeof(struct scatterlist),
+				       GFP_KERNEL);
 	if (!hwif->sg_table) {
 		printk(KERN_ERR "%s: unable to allocate SG table.\n", hwif->name);
 		goto out;
 	}
 
 	sg_init_table(hwif->sg_table, hwif->sg_max_nents);
-
+	
 	if (init_irq(hwif)) {
 		printk(KERN_ERR "%s: disabled, unable to get IRQ %d\n",
 			hwif->name, hwif->irq);
@@ -1119,6 +1152,37 @@ static void ide_port_cable_detect(ide_hwif_t *hwif)
 	}
 }
 
+/*
+ * Deferred request list insertion handler
+ */
+static void drive_rq_insert_work(struct work_struct *work)
+{
+	ide_drive_t *drive = container_of(work, ide_drive_t, rq_work);
+	ide_hwif_t *hwif = drive->hwif;
+	struct request *rq;
+	blk_status_t ret;
+	LIST_HEAD(list);
+
+	blk_mq_quiesce_queue(drive->queue);
+
+	ret = BLK_STS_OK;
+	spin_lock_irq(&hwif->lock);
+	while (!list_empty(&drive->rq_list)) {
+		rq = list_first_entry(&drive->rq_list, struct request, queuelist);
+		list_del_init(&rq->queuelist);
+
+		spin_unlock_irq(&hwif->lock);
+		ret = ide_issue_rq(drive, rq, true);
+		spin_lock_irq(&hwif->lock);
+	}
+	spin_unlock_irq(&hwif->lock);
+
+	blk_mq_unquiesce_queue(drive->queue);
+
+	if (ret != BLK_STS_OK)
+		kblockd_schedule_work(&drive->rq_work);
+}
+
 static const u8 ide_hwif_to_major[] =
 	{ IDE0_MAJOR, IDE1_MAJOR, IDE2_MAJOR, IDE3_MAJOR, IDE4_MAJOR,
 	  IDE5_MAJOR, IDE6_MAJOR, IDE7_MAJOR, IDE8_MAJOR, IDE9_MAJOR };
@@ -1150,6 +1214,9 @@ static void ide_port_init_devices_data(ide_hwif_t *hwif)
 
 		INIT_LIST_HEAD(&drive->list);
 		init_completion(&drive->gendev_rel_comp);
+
+		INIT_WORK(&drive->rq_work, drive_rq_insert_work);
+		INIT_LIST_HEAD(&drive->rq_list);
 	}
 }
 
@@ -1166,9 +1233,7 @@ static void ide_init_port_data(ide_hwif_t *hwif, unsigned int index)
 
 	spin_lock_init(&hwif->lock);
 
-	init_timer(&hwif->timer);
-	hwif->timer.function = &ide_timer_expiry;
-	hwif->timer.data = (unsigned long)hwif;
+	timer_setup(&hwif->timer, ide_timer_expiry, 0);
 
 	init_completion(&hwif->gendev_rel_comp);
 
@@ -1248,11 +1313,10 @@ static void ide_port_free_devices(ide_hwif_t *hwif)
 
 static int ide_port_alloc_devices(ide_hwif_t *hwif, int node)
 {
+	ide_drive_t *drive;
 	int i;
 
 	for (i = 0; i < MAX_DRIVES; i++) {
-		ide_drive_t *drive;
-
 		drive = kzalloc_node(sizeof(*drive), GFP_KERNEL, node);
 		if (drive == NULL)
 			goto out_nomem;
@@ -1267,12 +1331,14 @@ static int ide_port_alloc_devices(ide_hwif_t *hwif, int node)
 		 */
 		drive->id = kzalloc_node(SECTOR_SIZE, GFP_KERNEL, node);
 		if (drive->id == NULL)
-			goto out_nomem;
+			goto out_free_drive;
 
 		hwif->devices[i] = drive;
 	}
 	return 0;
 
+out_free_drive:
+	kfree(drive);
 out_nomem:
 	ide_port_free_devices(hwif);
 	return -ENOMEM;
@@ -1372,6 +1438,9 @@ int ide_host_register(struct ide_host *host, const struct ide_port_info *d,
 	ide_hwif_t *hwif, *mate = NULL;
 	int i, j = 0;
 
+	pr_warn("legacy IDE will be removed in 2021, please switch to libata\n"
+		"Report any missing HW support to linux-ide@vger.kernel.org\n");
+
 	ide_host_for_each_port(i, hwif, host) {
 		if (hwif == NULL) {
 			mate = NULL;
@@ -1426,6 +1495,7 @@ int ide_host_register(struct ide_host *host, const struct ide_port_info *d,
 		if (hwif_init(hwif) == 0) {
 			printk(KERN_INFO "%s: failed to initialize IDE "
 					 "interface\n", hwif->name);
+			device_unregister(hwif->portdev);
 			device_unregister(&hwif->gendev);
 			ide_disable_port(hwif);
 			continue;

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/fs/minix/bitmap.c
  *
@@ -103,7 +104,7 @@ unsigned long minix_count_free_blocks(struct super_block *sb)
 }
 
 struct minix_inode *
-minix_V1_raw_inode(struct super_block *sb, ino_t ino, struct buffer_head **bh)
+minix_raw_inode(struct super_block *sb, ino_t ino, struct buffer_head **bh)
 {
 	int block;
 	struct minix_sb_info *sbi = minix_sb(sb);
@@ -131,9 +132,9 @@ minix_V1_raw_inode(struct super_block *sb, ino_t ino, struct buffer_head **bh)
 static void minix_clear_inode(struct inode *inode)
 {
 	struct buffer_head *bh = NULL;
-	struct minix_inode *raw_inode;
 
-	raw_inode = minix_V1_raw_inode(inode->i_sb, inode->i_ino, &bh);
+	struct minix_inode *raw_inode;
+	raw_inode = minix_raw_inode(inode->i_sb, inode->i_ino, &bh);
 	if (raw_inode) {
 		raw_inode->i_nlinks = 0;
 		raw_inode->i_mode = 0;
@@ -219,9 +220,9 @@ struct inode *minix_new_inode(const struct inode *dir, umode_t mode, int *error)
 	}
 	inode_init_owner(inode, dir, mode);
 	inode->i_ino = j;
-	inode->i_mtime = inode->i_atime = inode->i_ctime = CURRENT_TIME_SEC;
+	inode->i_mtime = inode->i_atime = inode->i_ctime = current_time(inode);
 	inode->i_blocks = 0;
-	memset(&minix_i(inode)->u, 0, sizeof(minix_i(inode)->u));
+	memset(&minix_i(inode)->data, 0, sizeof(minix_i(inode)->data));
 	insert_inode_hash(inode);
 	mark_inode_dirty(inode);
 

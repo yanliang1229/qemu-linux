@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_SPINLOCK_H
 #define __ASM_SPINLOCK_H
 
@@ -6,6 +7,8 @@
 #endif
 
 #include <linux/prefetch.h>
+#include <asm/barrier.h>
+#include <asm/processor.h>
 
 /*
  * sev and wfe are ARMv6K extensions.  Uniprocessor ARMv6 may not have the K
@@ -50,11 +53,6 @@ static inline void dsb_sev(void)
  * memory.
  */
 
-#define arch_spin_unlock_wait(lock) \
-	do { while (arch_spin_is_locked(lock)) cpu_relax(); } while (0)
-
-#define arch_spin_lock_flags(lock, flags) arch_spin_lock(lock)
-
 static inline void arch_spin_lock(arch_spinlock_t *lock)
 {
 	unsigned long tmp;
@@ -63,18 +61,24 @@ static inline void arch_spin_lock(arch_spinlock_t *lock)
 
 	prefetchw(&lock->slock);
 	__asm__ __volatile__(
-"1:	ldrex	%0, [%3]\n"
-"	add	%1, %0, %4\n"
-"	strex	%2, %1, [%3]\n"
-"	teq	%2, #0\n"
+"1:	ldrex	%0, [%3]\n"		/* lockval = lock->slock */
+"	add	%1, %0, %4\n"		/* newval = lockval + 1 << TICKET_SHIFT 小端机器上，等价于 newval = lock->next++ */
+"	strex	%2, %1, [%3]\n"		/* lock->slock = newval */
+"	teq	%2, #0\n"		/* 存储成功，返回0 */
 "	bne	1b"
 	: "=&r" (lockval), "=&r" (newval), "=&r" (tmp)
 	: "r" (&lock->slock), "I" (1 << TICKET_SHIFT)
 	: "cc");
 
+	/* 判断当前spin lock的状态，如果是unlocked，那么直接获取到该锁 */
 	while (lockval.tickets.next != lockval.tickets.owner) {
+		/* 如果当前spin lock的状态是locked，那么调用wfe进入等待状态 */
 		wfe();
-		lockval.tickets.owner = ACCESS_ONCE(lock->tickets.owner);
+		/**
+		 * 其他的CPU唤醒了本cpu的执行，说明owner发生了变化，该新的own赋给
+		 * lockval，然后继续判断spin lock的状态
+		 */
+		lockval.tickets.owner = READ_ONCE(lock->tickets.owner);
 	}
 
 	smp_mb();
@@ -109,8 +113,8 @@ static inline int arch_spin_trylock(arch_spinlock_t *lock)
 static inline void arch_spin_unlock(arch_spinlock_t *lock)
 {
 	smp_mb();
-	lock->tickets.owner++;
-	dsb_sev();
+	lock->tickets.owner++;	/* 下一个可持有自旋锁的编号 */
+	dsb_sev();	/* 唤醒 cpu */
 }
 
 static inline int arch_spin_value_unlocked(arch_spinlock_t lock)
@@ -194,9 +198,6 @@ static inline void arch_write_unlock(arch_rwlock_t *rw)
 	dsb_sev();
 }
 
-/* write_can_lock - would write_trylock() succeed? */
-#define arch_write_can_lock(x)		(ACCESS_ONCE((x)->lock) == 0)
-
 /*
  * Read locks are a bit more hairy:
  *  - Exclusively load the lock value.
@@ -215,11 +216,12 @@ static inline void arch_read_lock(arch_rwlock_t *rw)
 
 	prefetchw(&rw->lock);
 	__asm__ __volatile__(
+"	.syntax unified\n"
 "1:	ldrex	%0, [%2]\n"
 "	adds	%0, %0, #1\n"
 "	strexpl	%1, %0, [%2]\n"
 	WFE("mi")
-"	rsbpls	%0, %1, #0\n"
+"	rsbspl	%0, %1, #0\n"
 "	bmi	1b"
 	: "=&r" (tmp), "=&r" (tmp2)
 	: "r" (&rw->lock)
@@ -273,15 +275,5 @@ static inline int arch_read_trylock(arch_rwlock_t *rw)
 		return 0;
 	}
 }
-
-/* read_can_lock - would read_trylock() succeed? */
-#define arch_read_can_lock(x)		(ACCESS_ONCE((x)->lock) < 0x80000000)
-
-#define arch_read_lock_flags(lock, flags) arch_read_lock(lock)
-#define arch_write_lock_flags(lock, flags) arch_write_lock(lock)
-
-#define arch_spin_relax(lock)	cpu_relax()
-#define arch_read_relax(lock)	cpu_relax()
-#define arch_write_relax(lock)	cpu_relax()
 
 #endif /* __ASM_SPINLOCK_H */

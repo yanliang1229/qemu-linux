@@ -2,7 +2,10 @@
 export CPUS=`grep -c processor /proc/cpuinfo`
 export ARCH=arm64
 export CROSS_COMPILE=/opt/gcc-linaro-5.4.1-2017.01-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-
-OUTPUT_PATH=output
+export KBUILD_BUILD_USER=linux
+export KBUILD_BUILD_HOST=qemu
+
+OUTPUT_PATH=output64
 
 do_build_debug()
 {
@@ -12,29 +15,32 @@ do_build_debug()
 	fi
 	case $1 in
 		-b)
-			make  O=output_arm64 qemu_defconfig
-			make  O=output_arm64 -j${CPUS}
+			make  O=${OUTPUT_PATH} qemu_defconfig
+			make  O=${OUTPUT_PATH} -j${CPUS}
 		;;
 		-r)
-			../qemu/qemu-system-aarch64 -M virt-cortex-a53,gic_version=2  \
+			qemu-system-aarch64 -M virt-cortex-a53  \
 			-smp cpus=4 -m 4096M  \
-			-kernel output_arm64/arch/arm64/boot/Image \
-			-dtb output_arm64/arch/arm64/boot/dts/arm/virt-a53-gicv2.dtb \
-			-append "root=/dev/mmcblk0 console=ttyAMA0 rw dsched_debug" \
+			-kernel ${OUTPUT_PATH}/arch/arm64/boot/Image \
+                        -dtb ${OUTPUT_PATH}/arch/arm64/boot/dts/arm/virt-a53-gicv3.dtb \
+			-append "root=/dev/mmcblk0 earlycon=pl011,0x9000000 console=ttyAMA0 rootfstype=toy rw dsched_debug" \
+			-serial stdio \
+			-show-cursor \
 			-net user,hostfwd=tcp::5555-:22 \
 			-net nic \
-			-serial stdio \
-			-sd ../output/images/rootfs.ext2
+			-usb \
+			-drive if=none,format=raw,id=disk1,file=udisk.img \
+			-device usb-storage,drive=disk1 \
+			-sd rootfs.toy
 		;;
 		-d)
-			../qemu/qemu-system-aarch64 -M virt-cortex-a53,gic_version=2  \
+			qemu-system-aarch64 -M virt-cortex-a53 -nographic \
 			-smp cpus=4 -m 4096M  \
-			-kernel output_arm64/arch/arm64/boot/Image \
-			-dtb output_arm64/arch/arm64/boot/dts/arm/virt-a53-gicv2.dtb \
-			-append "root=/dev/mmcblk0 console=ttyAMA0 rw dsched_debug" \
-			-serial stdio \
-			-S -s \
-			-sd ../output/images/rootfs.ext2
+			-kernel ${OUTPUT_PATH}/arch/arm64/boot/Image \
+                        -dtb ${OUTPUT_PATH}/arch/arm64/boot/dts/arm/virt-a53-gicv2.dtb \
+			-append "root=/dev/mmcblk0 earlycon=pl011,0x9000000 console=ttyAMA0 rootfstype=toy rw dsched_debug" \
+			-s -S  \
+			-sd rootfs.toy
 		;;
 		-f)
 			echo "===== make rootfs ========="
@@ -46,7 +52,7 @@ do_build_debug()
 			echo "===== make rootfs done====="
 		;;
 		-c)
-			make -C output_arm64 clean
+			make -C output clean
 		;;
 		*)
 		;;

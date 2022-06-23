@@ -1,0 +1,1 @@
+obj-$(CONFIG_PER-CPU_TEST)	+= per-cpu_test.o

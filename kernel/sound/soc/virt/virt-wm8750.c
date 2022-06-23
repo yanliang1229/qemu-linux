@@ -55,6 +55,7 @@ static int virt_wm8750_probe(struct platform_device *pdev)
 	struct platform_device *cpu_pdev;
 	struct i2c_client *codec_dev;
 	struct virt_wm8750_data *data = NULL;
+	struct snd_soc_dai_link_component *comp;
 	int ret;
 
 	cpu_np = of_parse_phandle(pdev->dev.of_node, "audio-cpu", 0);
@@ -77,6 +78,12 @@ static int virt_wm8750_probe(struct platform_device *pdev)
 		return -EPROBE_DEFER;
 	}
 
+	comp = devm_kzalloc(&pdev->dev, 3 * sizeof(*comp), GFP_KERNEL);
+	if (!comp) {
+		ret = -ENOMEM;
+		goto fail;
+	}
+
 	data = devm_kzalloc(&pdev->dev, sizeof(*data), GFP_KERNEL);
 	if (!data) {
 		ret = -ENOMEM;
@@ -85,12 +92,20 @@ static int virt_wm8750_probe(struct platform_device *pdev)
 
 	data->clk_frequency = 18432000;
 
+	data->dai.cpus		= &comp[0];
+	data->dai.codecs	= &comp[1];
+	data->dai.platforms	= &comp[2];
+
+	data->dai.num_cpus	= 1;
+	data->dai.num_codecs	= 1;
+	data->dai.num_platforms	= 1;
+
 	data->dai.name = "HiFi";
 	data->dai.stream_name = "HiFi";
-	data->dai.codec_dai_name = "wm8750-hifi";
-	data->dai.codec_of_node = codec_np;
-	data->dai.cpu_of_node = cpu_np;
-	data->dai.platform_of_node = cpu_np;
+	data->dai.codecs->dai_name = "wm8750-hifi";
+	data->dai.codecs->of_node = codec_np;
+	data->dai.cpus->of_node = cpu_np;
+	data->dai.platforms->of_node = cpu_np;
 	data->dai.init = &virt_wm8750_dai_init;
 	data->dai.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF |
 			    SND_SOC_DAIFMT_CBM_CFM;

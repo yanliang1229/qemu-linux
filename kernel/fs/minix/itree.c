@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <linux/buffer_head.h>
 #include <linux/slab.h>
 #include "minix.h"
@@ -18,22 +19,21 @@ static inline block_t cpu_to_block(unsigned long n)
 
 static inline block_t *i_data(struct inode *inode)
 {
-	return (block_t *)minix_i(inode)->u.i1_data;
+	return (block_t *)minix_i(inode)->data;
 }
 
 static int block_to_path(struct inode * inode, long block, int offsets[DEPTH])
 {
 	int n = 0;
-	char b[BDEVNAME_SIZE];
 
 	if (block < 0) {
-		printk("MINIX-fs: block_to_path: block %ld < 0 on dev %s\n",
-			block, bdevname(inode->i_sb->s_bdev, b));
+		printk("MINIX-fs: block_to_path: block %ld < 0 on dev %pg\n",
+			block, inode->i_sb->s_bdev);
 	} else if (block >= (minix_sb(inode->i_sb)->s_max_size/BLOCK_SIZE)) {
 		if (printk_ratelimit())
 			printk("MINIX-fs: block_to_path: "
-			       "block %ld too big on dev %s\n",
-				block, bdevname(inode->i_sb->s_bdev, b));
+			       "block %ld too big on dev %pg\n",
+				block, inode->i_sb->s_bdev);
 	} else if (block < 7) {
 		offsets[n++] = block;
 	} else if ((block -= 7) < 512) {
@@ -47,8 +47,6 @@ static int block_to_path(struct inode * inode, long block, int offsets[DEPTH])
 	}
 	return n;
 }
-
-/* Generic part */
 
 typedef struct {
 	block_t	*p;
@@ -174,7 +172,7 @@ static inline int splice_branch(struct inode *inode,
 
 	/* We are done with atomic stuff, now do the rest of housekeeping */
 
-	inode->i_ctime = CURRENT_TIME_SEC;
+	inode->i_ctime = current_time(inode);
 
 	/* had we spliced it onto indirect block? */
 	if (where->bh)
@@ -192,7 +190,7 @@ changed:
 	return -EAGAIN;
 }
 
-static inline int get_block(struct inode * inode, sector_t block,
+static int get_block(struct inode * inode, sector_t block,
 			struct buffer_head *bh, int create)
 {
 	int err = -EIO;
@@ -340,7 +338,7 @@ static void free_branches(struct inode *inode, block_t *p, block_t *q, int depth
 		free_data(inode, p, q);
 }
 
-static inline void truncate (struct inode * inode)
+static inline void truncate(struct inode * inode)
 {
 	struct super_block *sb = inode->i_sb;
 	block_t *idata = i_data(inode);
@@ -393,7 +391,7 @@ do_indirects:
 		}
 		first_whole++;
 	}
-	inode->i_mtime = inode->i_ctime = CURRENT_TIME_SEC;
+	inode->i_mtime = inode->i_ctime = current_time(inode);
 	mark_inode_dirty(inode);
 }
 
@@ -413,18 +411,20 @@ static inline unsigned nblocks(loff_t size, struct super_block *sb)
 	return res;
 }
 
-int V1_minix_get_block(struct inode * inode, long block,
+int minix_get_block(struct inode * inode, sector_t block,
 			struct buffer_head *bh_result, int create)
 {
 	return get_block(inode, block, bh_result, create);
 }
 
-void V1_minix_truncate(struct inode * inode)
+void minix_truncate(struct inode * inode)
 {
+	if (!(S_ISREG(inode->i_mode) || S_ISDIR(inode->i_mode) || S_ISLNK(inode->i_mode)))
+		return;
 	truncate(inode);
 }
 
-unsigned V1_minix_blocks(loff_t size, struct super_block *sb)
+unsigned minix_blocks(loff_t size, struct super_block *sb)
 {
 	return nblocks(size, sb);
 }

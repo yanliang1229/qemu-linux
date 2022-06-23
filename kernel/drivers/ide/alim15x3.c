@@ -43,7 +43,7 @@
  *	ALi devices are not plug in. Otherwise these static values would
  *	need to go. They ought to go away anyway
  */
-
+ 
 static u8 m5229_revision;
 static u8 chip_is_1543c_e;
 static struct pci_dev *isa_dev;
@@ -120,7 +120,7 @@ static void ali_set_pio_mode(ide_hwif_t *hwif, ide_drive_t *drive)
 		}
 	}
 
-	/*
+	/* 
 	 * PIO mode => ATA FIFO on, ATAPI FIFO off
 	 */
 	ali_fifo_control(hwif, drive, (drive->media == ide_disk) ? 0x05 : 0x00);
@@ -220,7 +220,7 @@ static int ali_dma_check(ide_drive_t *drive, struct ide_cmd *cmd)
  *	init_chipset_ali15x3	-	Initialise an ALi IDE controller
  *	@dev: PCI device
  *
- *	This function initializes the ALI IDE controller and where
+ *	This function initializes the ALI IDE controller and where 
  *	appropriate also sets up the 1533 southbridge.
  */
 
@@ -234,7 +234,7 @@ static int init_chipset_ali15x3(struct pci_dev *dev)
 
 	isa_dev = pci_get_device(PCI_VENDOR_ID_AL, PCI_DEVICE_ID_AL_M1533, NULL);
 
-	local_irq_save_nort(flags);
+	local_irq_save(flags);
 
 	if (m5229_revision < 0xC2) {
 		/*
@@ -281,7 +281,7 @@ static int init_chipset_ali15x3(struct pci_dev *dev)
 		goto out;
 
 	if (m5229_revision < 0xC5 && isa_dev)
-	{
+	{	
 		/*
 		 * set south-bridge's enable bit, m1533, 0x79
 		 */
@@ -323,9 +323,9 @@ out:
 
 		pci_write_config_byte(dev, 0x53, tmpbyte);
 	}
+	local_irq_restore(flags);
 	pci_dev_put(north);
 	pci_dev_put(isa_dev);
-	local_irq_restore_nort(flags);
 	return 0;
 }
 
@@ -530,7 +530,7 @@ static const struct ide_port_info ali15x3_chipset = {
  *	Perform the actual set up for an ALi15x3 that has been found by the
  *	hot plug layer.
  */
-
+ 
 static int alim15x3_init_one(struct pci_dev *dev,
 			     const struct pci_device_id *id)
 {

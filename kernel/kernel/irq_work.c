@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2010 Red Hat, Inc., Peter Zijlstra
  *
@@ -17,7 +18,6 @@
 #include <linux/cpu.h>
 #include <linux/notifier.h>
 #include <linux/smp.h>
-#include <linux/interrupt.h>
 #include <asm/processor.h>
 
 
@@ -37,7 +37,7 @@ static bool irq_work_claim(struct irq_work *work)
 	 */
 	flags = work->flags & ~IRQ_WORK_PENDING;
 	for (;;) {
-		nflags = flags | IRQ_WORK_FLAGS;
+		nflags = flags | IRQ_WORK_CLAIMED;
 		oflags = cmpxchg(&work->flags, flags, nflags);
 		if (oflags == flags)
 			break;
@@ -57,7 +57,36 @@ void __weak arch_irq_work_raise(void)
 	 */
 }
 
-#ifdef CONFIG_SMP
+/* Enqueue on current CPU, work must already be claimed and preempt disabled */
+static void __irq_work_queue_local(struct irq_work *work)
+{
+	/* If the work is "lazy", handle it from next tick if any */
+	if (work->flags & IRQ_WORK_LAZY) {
+		if (llist_add(&work->llnode, this_cpu_ptr(&lazy_list)) &&
+		    tick_nohz_tick_stopped())
+			arch_irq_work_raise();
+	} else {
+		if (llist_add(&work->llnode, this_cpu_ptr(&raised_list)))
+			arch_irq_work_raise();
+	}
+}
+
+/* Enqueue the irq work @work on the current CPU */
+bool irq_work_queue(struct irq_work *work)
+{
+	/* Only queue if not already pending */
+	if (!irq_work_claim(work))
+		return false;
+
+	/* Queue the entry and raise the IPI if needed. */
+	preempt_disable();
+	__irq_work_queue_local(work);
+	preempt_enable();
+
+	return true;
+}
+EXPORT_SYMBOL_GPL(irq_work_queue);
+
 /*
  * Enqueue the irq_work @work on @cpu unless it's already pending
  * somewhere.
@@ -66,60 +95,32 @@ void __weak arch_irq_work_raise(void)
  */
 bool irq_work_queue_on(struct irq_work *work, int cpu)
 {
-	struct llist_head *list;
+#ifndef CONFIG_SMP
+	return irq_work_queue(work);
+
+#else /* CONFIG_SMP: */
 	/* All work should have been flushed before going offline */
 	WARN_ON_ONCE(cpu_is_offline(cpu));
 
-	/* Arch remote IPI send/receive backend aren't NMI safe */
-	WARN_ON_ONCE(in_nmi());
-
 	/* Only queue if not already pending */
 	if (!irq_work_claim(work))
 		return false;
 
-	if (IS_ENABLED(CONFIG_PREEMPT_RT_FULL) && !(work->flags & IRQ_WORK_HARD_IRQ))
-		list = &per_cpu(lazy_list, cpu);
-	else
-		list = &per_cpu(raised_list, cpu);
-
-	if (llist_add(&work->llnode, list))
-		arch_send_call_function_single_ipi(cpu);
-
-	return true;
-}
-EXPORT_SYMBOL_GPL(irq_work_queue_on);
-#endif
-
-/* Enqueue the irq work @work on the current CPU */
-bool irq_work_queue(struct irq_work *work)
-{
-	struct llist_head *list;
-	bool lazy_work, realtime = IS_ENABLED(CONFIG_PREEMPT_RT_FULL);
-
-	/* Only queue if not already pending */
-	if (!irq_work_claim(work))
-		return false;
-
-	/* Queue the entry and raise the IPI if needed. */
 	preempt_disable();
-
-	lazy_work = work->flags & IRQ_WORK_LAZY;
-
-	if (lazy_work || (realtime && !(work->flags & IRQ_WORK_HARD_IRQ)))
-		list = this_cpu_ptr(&lazy_list);
-	else
-		list = this_cpu_ptr(&raised_list);
-
-	if (llist_add(&work->llnode, list)) {
-		if (!lazy_work || tick_nohz_tick_stopped())
-			arch_irq_work_raise();
+	if (cpu != smp_processor_id()) {
+		/* Arch remote IPI send/receive backend aren't NMI safe */
+		WARN_ON_ONCE(in_nmi());
+		if (llist_add(&work->llnode, &per_cpu(raised_list, cpu)))
+			arch_send_call_function_single_ipi(cpu);
+	} else {
+		__irq_work_queue_local(work);
 	}
-
 	preempt_enable();
 
 	return true;
+#endif /* CONFIG_SMP */
 }
-EXPORT_SYMBOL_GPL(irq_work_queue);
+
 
 bool irq_work_needs_cpu(void)
 {
@@ -128,8 +129,9 @@ bool irq_work_needs_cpu(void)
 	raised = this_cpu_ptr(&raised_list);
 	lazy = this_cpu_ptr(&lazy_list);
 
-	if (llist_empty(raised) && llist_empty(lazy))
-		return false;
+	if (llist_empty(raised) || arch_irq_work_has_interrupt())
+		if (llist_empty(lazy))
+			return false;
 
 	/* All work should have been flushed before going offline */
 	WARN_ON_ONCE(cpu_is_offline(smp_processor_id()));
@@ -139,21 +141,17 @@ bool irq_work_needs_cpu(void)
 
 static void irq_work_run_list(struct llist_head *list)
 {
-	unsigned long flags;
-	struct irq_work *work;
+	struct irq_work *work, *tmp;
 	struct llist_node *llnode;
+	unsigned long flags;
 
-	BUG_ON_NONRT(!irqs_disabled());
+	BUG_ON(!irqs_disabled());
 
 	if (llist_empty(list))
 		return;
 
 	llnode = llist_del_all(list);
-	while (llnode != NULL) {
-		work = llist_entry(llnode, struct irq_work, llnode);
-
-		llnode = llist_next(llnode);
-
+	llist_for_each_entry_safe(work, tmp, llnode, llnode) {
 		/*
 		 * Clear the PENDING bit, after this point the @work
 		 * can be re-used.
@@ -180,16 +178,7 @@ static void irq_work_run_list(struct llist_head *list)
 void irq_work_run(void)
 {
 	irq_work_run_list(this_cpu_ptr(&raised_list));
-	if (IS_ENABLED(CONFIG_PREEMPT_RT_FULL)) {
-		/*
-		 * NOTE: we raise softirq via IPI for safety,
-		 * and execute in irq_work_tick() to move the
-		 * overhead from hard to soft irq context.
-		 */
-		if (!llist_empty(this_cpu_ptr(&lazy_list)))
-			raise_softirq(TIMER_SOFTIRQ);
-	} else
-		irq_work_run_list(this_cpu_ptr(&lazy_list));
+	irq_work_run_list(this_cpu_ptr(&lazy_list));
 }
 EXPORT_SYMBOL_GPL(irq_work_run);
 
@@ -199,24 +188,16 @@ void irq_work_tick(void)
 
 	if (!llist_empty(raised) && !arch_irq_work_has_interrupt())
 		irq_work_run_list(raised);
-
-	if (!IS_ENABLED(CONFIG_PREEMPT_RT_FULL))
-		irq_work_run_list(this_cpu_ptr(&lazy_list));
-}
-
-#if defined(CONFIG_IRQ_WORK) && defined(CONFIG_PREEMPT_RT_FULL)
-void irq_work_tick_soft(void)
-{
 	irq_work_run_list(this_cpu_ptr(&lazy_list));
 }
-#endif
+
 /*
  * Synchronize against the irq_work @entry, ensures the entry is not
  * currently in use.
  */
 void irq_work_sync(struct irq_work *work)
 {
-	WARN_ON_ONCE(irqs_disabled());
+	lockdep_assert_irqs_enabled();
 
 	while (work->flags & IRQ_WORK_BUSY)
 		cpu_relax();

@@ -1,7 +1,7 @@
 #!/bin/bash
 export CPUS=`grep -c processor /proc/cpuinfo`
 export ARCH=arm
-export CROSS_COMPILE=arm-fsl-linux-gnueabi-
+export CROSS_COMPILE=/opt/gcc-linaro-5.5.0-2017.10-x86_64_arm-linux-gnueabi/bin/arm-linux-gnueabi-
 OUTPUT_PATH=output
 
 do_build_debug()
@@ -21,18 +21,18 @@ do_build_debug()
 		-r)
 			qemu-system-arm -M vexpress-a9 -smp 4 -m 1024M\
 			-kernel ${OUTPUT_PATH}/arch/arm/boot/zImage \
-			-dtb ${OUTPUT_PATH}/arch/arm/boot/dts/vexpress-v2p-ca9.dtb \
+			-dtb ${OUTPUT_PATH}/arch/arm/boot/dts/arm/vexpress-qemu-a9.dtb \
 			-sd rootfs.ext2 \
-			-append "console=ttyAMA0,115200 init=/linuxrc root=/dev/mmcblk0" \
+			-append "console=ttyAMA0,115200 root=/dev/mmcblk0 rw rootwait " \
 			-serial stdio  -show-cursor
 		;;
 
 		-d)
 			qemu-system-arm -M vexpress-a9 -smp 4 -m 1024M\
 			-kernel ${OUTPUT_PATH}/arch/arm/boot/zImage \
-			-dtb ${OUTPUT_PATH}/arch/arm/boot/dts/vexpress-v2p-ca9.dtb \
+			-dtb ${OUTPUT_PATH}/arch/arm/boot/dts/arm/vexpress-qemu-a9.dtb \
 			-sd rootfs.ext2 \
-			-append "console=ttyAMA0,115200 init=/linuxrc root=/dev/mmcblk0" \
+			-append "console=ttyAMA0,115200 root=/dev/mmcblk0 rw rootwait " \
 			-serial stdio  -show-cursor -S -s
 		;;
 		*)

@@ -1,47 +1,22 @@
 #include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/input/input.h>
 
-/dts-v1/;
+#include "virt-a53-psci.dtsi"
 
 / {
-	compatible = "linux,virt-cortex-a53";
-	interrupt-parent = <&gic>;
-	#size-cells = <0x02>;
-	#address-cells = <0x02>;
 
-
-	chosen {};
-
-	cpus {
-		#size-cells = <0x00>;
-		#address-cells = <0x01>;
-
-		cpu@0 {
-			device_type = "cpu";
-			compatible = "arm,cortex-a53";
-			enable-method = "psci";
-			reg = <0>;
-		};
-
-		cpu@1 {
-			device_type = "cpu";
-			compatible = "arm,cortex-a53";
-			enable-method = "psci";
-			reg = <1>;
-		};
-
-		cpu@2 {
-			device_type = "cpu";
-			compatible = "arm,cortex-a53";
-			enable-method = "psci";
-			reg = <2>;
-		};
-
-		cpu@3 {
-			device_type = "cpu";
-			compatible = "arm,cortex-a53";
-			enable-method = "psci";
-			reg = <3>;
-		};
+	sound {
+		compatible = "qemu,virt-audio-wm8750";
+		model = "qemu-audio";
+		audio-cpu = <&i2s0>;
+		audio-codec = <&codec>;
+		audio-routing =
+			"Headphone Jack", "LOUT1",
+			"Headphone Jack", "ROUT1",
+			"Ext Spk", "LOUT2",
+			"Ext Spk", "ROUT2",
+			"Mic Jack", "LINPUT1",
+			"Mic Jack", "RINPUT1";
 	};
 
 	timer {
@@ -56,8 +31,15 @@
 	sysclk: apb-pclk {
 		compatible = "fixed-clock";
 		clock-output-names = "clk24mhz";
-		clock-frequency = <0x16e3600>;
-		#clock-cells = <0x00>;
+		clock-frequency = <24000000>;
+		#clock-cells = <0>;
+	};
+
+	soc_usb48mhz: clk48mhz {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <48000000>;
+		clock-output-names = "clk48mhz";
 	};
 
 	fixed_supply: fixed-regulator {
@@ -70,7 +52,7 @@
 
 	memory@40000000 {
 		device_type = "memory";
-		reg = <0x00 0x40000000 0x1 0x00000000>;
+		reg = <0 0x40000000 0x1 0x00000000>;
 	};
 
 	gic: interrupt-controller@8000000 {
@@ -79,20 +61,55 @@
 		interrupt-controller;
 		#address-cells = <2>;
 		#size-cells = <2>;
-		ranges;
 		#redistributor-regions = <1>;
-		reg = <0x00 0x8000000 0x00 0x10000>,
-		      <0x00 0x80a0000 0x00 0xf60000>;
-		its: gic-its@8080000 {
-			compatible = "arm,gic-v3-its";
-			msi-controller;
-			reg = <0 0x08080000 0 0x00020000>;
-		};
+		reg = <0 0x8000000 0 0x10000>,
+		      <0 0x80a0000 0 0xf60000>;
 	};
 
 	pmu {
 		compatible = "arm,armv8-pmuv3";
 		interrupts = <GIC_PPI 0x07 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-affinity = <&A53_0>, <&A53_1>, <&A53_2>, <&A53_3>;
+	};
+
+	i2c0: i2c@9082000 {
+		compatible = "arm,versatile-i2c";
+		reg = <0 0x09082000 0 0x1000>;
+		#address-cells = <1>;
+		#size-cells = <0>;
+		codec: wm8750@1b {
+			compatible = "wm8750";
+			reg = <0x1b>;
+		};
+	};
+
+	i2s0: i2s@9083000 {
+		compatible = "virt-i2s";
+		reg = <0 0x09083000 0 0x1000>;
+		dmas = <&dmac 4 1>, <&dmac 5 1>;
+		dma-names = "tx", "rx";
+	};
+
+	lan9118@a009000 {
+		compatible = "smsc,lan9118", "smsc,lan9115";
+		reg = <0 0x0a009000 0 0x10000>;
+		phy-mode = "mii";
+		interrupts = <GIC_SPI 15 IRQ_TYPE_LEVEL_HIGH>;
+		reg-io-width = <4>;
+		smsc,irq-active-high;
+		smsc,irq-push-pull;
+	};
+
+	gpio-keys {
+		compatible = "gpio-keys";
+		#size-cells = <0>;
+		#address-cells = <1>;
+
+		poweroff {
+			label = "GPIO Key Poweroff";
+			linux,code = <KEY_POWER>;
+			gpios = <&gpio0 3 0>;
+			};
 	};
 
 	amba {
@@ -102,8 +119,8 @@
 		ranges;
 
 		gpio0: gpio0@9030000 {
-			compatible = "arm,pl061\0arm,primecell";
-			reg = <0x00 0x9030000 0x00 0x1000>;
+			compatible = "arm,pl061","arm,primecell";
+			reg = <0 0x9030000 0 0x1000>;
 			#gpio-cells = <2>;
 			gpio-controller;
 			interrupts = <GIC_SPI 0x07 IRQ_TYPE_LEVEL_HIGH>;
@@ -113,7 +130,7 @@
 
 		rtc@9010000 {
 			compatible = "arm,pl031", "arm,primecell";
-			reg = <0x00 0x9010000 0x00 0x1000>;
+			reg = <0 0x9010000 0 0x1000>;
 			interrupts = <GIC_SPI 0x02 IRQ_TYPE_LEVEL_HIGH>;
 			clock-names = "apb_pclk";
 			clocks = <&sysclk>;
@@ -121,22 +138,116 @@
 
 		uart0: uart@9000000 {
 			compatible = "arm,pl011", "arm,primecell";
-			reg = <0x00 0x9000000 0x00 0x1000>;
+			reg = <0 0x9000000 0 0x1000>;
 			interrupts = <GIC_SPI 0x01 IRQ_TYPE_LEVEL_HIGH>;
 			clock-names = "uartclk","apb_pclk";
 			clocks = <&sysclk &sysclk>;
 		};
 
-		mmc@9020000 {
+		mmc@9080000 {
 			compatible = "arm,pl180", "arm,primecell";
-			reg = <0x00 0x9020000 0x00 0x1000>;
+			reg = <0 0x09080000 0 0x1000>;
 			interrupts =
-				<GIC_SPI 17 IRQ_TYPE_LEVEL_HIGH>,
-				<GIC_SPI 18 IRQ_TYPE_LEVEL_HIGH>;
+				<GIC_SPI 9 IRQ_TYPE_LEVEL_HIGH>,
+				<GIC_SPI 10 IRQ_TYPE_LEVEL_HIGH>;
 			vmmc-supply = <&fixed_supply>;
 			clock-names = "apb_pclk";
 			clocks = <&sysclk>;
 			max-frequency = <12000000>;
+		};
+
+		dmac: dma@a005000 {
+			compatible = "arm,pl081", "arm,primecell";
+			reg = <0 0x0a005000 0 0x1000>;
+			interrupts = <GIC_SPI 13 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&sysclk>;
+			clock-names = "apb_pclk";
+			#dma-cells = <2>;
+		};
+
+		lcd: lcd@a007000 {
+			compatible = "arm,pl111", "arm,primecell";
+			reg = <0 0x0a007000 0 0x1000>;
+			interrupts = <GIC_SPI 14 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&sysclk>, <&sysclk>;
+			clock-names = "clcd", "apb_pclk";
+
+			port {
+				clcd_pads: endpoint {
+					remote-endpoint = <&clcd_panel>;
+					arm,pl11x,tft-r0g0b0-pads = <0 8 16>;
+				};
+			};
+		};
+
+		keyboard: keyboard@a020000 {
+			compatible = "arm,pl050", "arm,primecell";
+			reg = <0 0x0a020000 0 0x1000>;
+			interrupts = <GIC_SPI 17 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&sysclk>, <&sysclk>;
+			clock-names = "KMIREFCLK", "apb_pclk";
+		};
+
+		mouse: mouse@a030000 {
+			compatible = "arm,pl050", "arm,primecell";
+			reg = <0 0x0a030000 0 0x1000>;
+			interrupts = <GIC_SPI 18 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&sysclk>, <&sysclk>;
+			clock-names = "KMIREFCLK", "apb_pclk";
+		};
+
+		ehci0: usb@a040000 {
+			compatible = "qemu,usb";
+			reg = <0 0x0a040000 0 0x1000>;
+			interrupts = <GIC_SPI 19 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&soc_usb48mhz>;
+		};
+
+		ehci1: usb@a050000 {
+			compatible = "qemu,usb";
+			reg = <0 0x0a050000 0 0x1000>;
+			interrupts = <GIC_SPI 20 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&soc_usb48mhz>;
+		};
+
+    		spi0: spi@a070000 {
+      			compatible = "arm,pl022", "arm,primecell";
+      			reg = <0 0x0a070000 0 0x1000>;
+      			#address-cells = <1>;
+      			#size-cells = <0>;
+      			interrupts = <GIC_SPI 22 IRQ_TYPE_LEVEL_HIGH>;
+			clocks = <&sysclk>, <&sysclk>;
+			clock-names = "SSPCLK", "apb_pclk";
+			cs-gpios = <&gpio0 2 0>;
+			num-cs = <1>;
+
+			flash: w25q256fv@0 {
+				compatible = "sst,w25q256", "jedec,spi-nor";
+				spi-max-frequency = <12000000>;
+				reg = <0>;
+			};
+		};
+	};
+
+	panel {
+		compatible = "panel-dpi";
+
+		port {
+			clcd_panel: endpoint {
+				remote-endpoint = <&clcd_pads>;
+			};
+		};
+
+		panel-timing {
+			clock-frequency = <25175000>;
+			hactive = <640>;
+			hback-porch = <40>;
+			hfront-porch = <24>;
+			hsync-len = <96>;
+			vactive = <480>;
+			vback-porch = <32>;
+			vfront-porch = <11>;
+			vsync-len = <2>;
 		};
 	};
 };
