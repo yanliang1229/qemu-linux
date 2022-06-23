@@ -406,7 +406,8 @@
         "kernel/usr":true,
         "kernel/output": true,
         "kernel/output_arm64":false,
-        "kernel/rootfs":true
+        "kernel/rootfs":true,
+        "output":false,
     },
 
     //----------Editor configuration-------

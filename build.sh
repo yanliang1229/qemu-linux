@@ -13,10 +13,10 @@ do_build_debug()
 			make  -j${CPUS}
 		;;
 		-r)
-			qemu/qemu-system-aarch64 -M virt-cortex-a53,gic_version=2  \
+			qemu/qemu-system-aarch64 -M virt-cortex-a53,gic_version=3  \
 			-smp cpus=4 -m 4096M  \
 			-kernel output/images/Image \
-			-dtb output/images/virt-a53-gicv2.dtb \
+			-dtb output/images/virt-a53-gicv3.dtb \
 			-append "root=/dev/mmcblk0 console=ttyAMA0 rw dsched_debug" \
 			-net user,hostfwd=tcp::5555-:22 \
 			-net nic \

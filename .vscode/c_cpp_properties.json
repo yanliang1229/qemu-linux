@@ -7,7 +7,7 @@
                "${workspaceFolder}/kernel/include",
                "${workspaceFolder}/kernel/arch/arm64/include"
             ],
-            "forcedInclude": ["${workspaceFolder}/output_arm64/include/generated/autoconf.h"],
+            "forcedInclude": ["${workspaceFolder}/output/build/linux/include/generated/autoconf.h"],
            "defines": [
                "__KERNEL__"
             ],
