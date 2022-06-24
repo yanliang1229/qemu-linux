@@ -2259,7 +2259,7 @@ static struct pci_dev *pci_scan_device(struct pci_bus *bus, int devfn)
 
 	if (!pci_bus_read_dev_vendor_id(bus, devfn, &l, 60*1000))
 		return NULL;
-
+	/* 扫描到pci设备，创建并注册该pci设备 */
 	dev = pci_alloc_dev(bus);
 	if (!dev)
 		return NULL;
@@ -2417,6 +2417,7 @@ void pci_device_add(struct pci_dev *dev, struct pci_bus *bus)
 	 * and the bus list for fixup functions, etc.
 	 */
 	down_write(&pci_bus_sem);
+	/* 加入该条总线中 */
 	list_add_tail(&dev->bus_list, &bus->devices);
 	up_write(&pci_bus_sem);
 
@@ -2432,6 +2433,9 @@ void pci_device_add(struct pci_dev *dev, struct pci_bus *bus)
 	WARN_ON(ret < 0);
 }
 
+/**
+ * @devfn:slot与function的编码
+ */
 struct pci_dev *pci_scan_single_device(struct pci_bus *bus, int devfn)
 {
 	struct pci_dev *dev;
@@ -2445,7 +2449,7 @@ struct pci_dev *pci_scan_single_device(struct pci_bus *bus, int devfn)
 	dev = pci_scan_device(bus, devfn);
 	if (!dev)
 		return NULL;
-
+	/* 将扫描到的设备注册到bus pci总线上 */
 	pci_device_add(dev, bus);
 
 	return dev;
@@ -2526,12 +2530,13 @@ int pci_scan_slot(struct pci_bus *bus, int devfn)
 		return 0;
 	if (!pci_dev_is_added(dev))
 		nr++;
-
+	/* 继续扫描该pci设备是否是一个多function的设备 */
 	for (fn = next_fn(bus, dev, 0); fn > 0; fn = next_fn(bus, dev, fn)) {
 		dev = pci_scan_single_device(bus, devfn + fn);
 		if (dev) {
 			if (!pci_dev_is_added(dev))
 				nr++;
+			/* 多功能设备 */
 			dev->multifunction = 1;
 		}
 	}
@@ -2736,7 +2741,13 @@ static unsigned int pci_scan_child_bus_extend(struct pci_bus *bus,
 
 	dev_dbg(&bus->dev, "scanning bus\n");
 
-	/* Go find them, Rover! */
+	/**
+	 * Go find them, Rover!
+	 * 扫描接入到该总线的上的pci ep 设备
+	 * 每条pci总线可以支持32个设备(32个slot)，每个设备可以支持8个function
+	 *
+	 * 256 / 8 = 32
+	 */
 	for (devfn = 0; devfn < 256; devfn += 8) {
 		nr_devs = pci_scan_slot(bus, devfn);
 
@@ -2784,6 +2795,7 @@ static unsigned int pci_scan_child_bus_extend(struct pci_bus *bus,
 	 * Scan bridges that are already configured. We don't touch them
 	 * unless they are misconfigured (which will be done in the second
 	 * scan below).
+	 * 扫描接入到该总线上的pci 桥设备
 	 */
 	for_each_pci_bridge(dev, bus) {
 		cmax = max;
@@ -3030,7 +3042,7 @@ int pci_scan_root_bus_bridge(struct pci_host_bridge *bridge)
 			found = true;
 			break;
 		}
-
+	/* 注册root host bridge */
 	ret = pci_register_host_bridge(bridge);
 	if (ret < 0)
 		return ret;
@@ -3044,7 +3056,7 @@ int pci_scan_root_bus_bridge(struct pci_host_bridge *bridge)
 			bus);
 		pci_bus_insert_busn_res(b, bus, 255);
 	}
-
+	/* 从root bus 开始扫描 */
 	max = pci_scan_child_bus(b);
 
 	if (!found)

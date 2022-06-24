@@ -60,9 +60,48 @@ int noinline pci_bus_write_config_##size \
 	return res;							\
 }
 
-PCI_OP_READ(byte, u8, 1)
-PCI_OP_READ(word, u16, 2)
-PCI_OP_READ(dword, u32, 4)
+int noinline pci_bus_read_config_byte
+	(struct pci_bus *bus, unsigned int devfn, int pos, u8 *value)
+{
+	int res;
+	unsigned long flags;
+	u32 data = 0;
+	if (PCI_byte_BAD) return PCIBIOS_BAD_REGISTER_NUMBER;
+	pci_lock_config(flags);
+	res = bus->ops->read(bus, devfn, pos, 1, &data);
+	*value = (u8)data;
+	pci_unlock_config(flags);
+	return res;
+}
+
+int noinline pci_bus_read_config_word
+	(struct pci_bus *bus, unsigned int devfn, int pos, u16 *value)
+{
+	int res;
+	unsigned long flags;
+	u32 data = 0;
+	if (PCI_word_BAD) return PCIBIOS_BAD_REGISTER_NUMBER;
+	pci_lock_config(flags);
+	res = bus->ops->read(bus, devfn, pos, 2, &data);
+	*value = (u16)data;
+	pci_unlock_config(flags);
+	return res;
+}
+
+int noinline pci_bus_read_config_dword
+	(struct pci_bus *bus, unsigned int devfn, int pos, u32 *value)
+{
+	int res;
+	unsigned long flags;
+	u32 data = 0;
+	if (PCI_dword_BAD) return PCIBIOS_BAD_REGISTER_NUMBER;
+	pci_lock_config(flags);
+	res = bus->ops->read(bus, devfn, pos, 4, &data);
+	*value = (u32)data;
+	pci_unlock_config(flags);
+	return res;
+}
+
 PCI_OP_WRITE(byte, u8, 1)
 PCI_OP_WRITE(word, u16, 2)
 PCI_OP_WRITE(dword, u32, 4)
