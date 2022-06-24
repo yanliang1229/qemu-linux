@@ -1684,10 +1684,13 @@ struct bus_type pcie_port_bus_type = {
 EXPORT_SYMBOL_GPL(pcie_port_bus_type);
 #endif
 
+/**
+ * PCI总线的初始化
+ */
 static int __init pci_driver_init(void)
 {
 	int ret;
-
+	/* 注册pci总线 */
 	ret = bus_register(&pci_bus_type);
 	if (ret)
 		return ret;

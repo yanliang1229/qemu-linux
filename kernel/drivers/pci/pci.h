@@ -228,6 +228,9 @@ extern unsigned long pci_hotplug_bus_size;
  * @dev: the PCI device structure to match against
  *
  * Returns the matching pci_device_id structure or %NULL if there is no match.
+ * PCI总线设备匹配规则
+ *  1. PCI_ANY_ID: 所有设备都匹配
+ *  2. 匹配设备的vendor, device, subvendor, subdevice, class
  */
 static inline const struct pci_device_id *
 pci_match_one_device(const struct pci_device_id *id, const struct pci_dev *dev)
