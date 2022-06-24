@@ -186,8 +186,8 @@
         "kernel/output": true,
         "kernel/output_arm64":true,
         "kernel/rootfs":true,
-        "output":true,
-        "dl":true
+        "buildroot/output":true,
+        "buildroot/dl":true
     },
 
     //-------- Files configuration --------

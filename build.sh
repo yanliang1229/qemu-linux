@@ -1,42 +1,75 @@
 #!/bin/bash
 export CPUS=`grep -c processor /proc/cpuinfo`
 
-do_build_debug()
+function run_linux()
 {
-	if [ $# -lt 1 ]; then
-		echo "input few args ..."
-		exit
-	fi
-	case $1 in
-		-b)
-			make  qemu_aarch64_virt_defconfig
-			make  -j${CPUS}
-		;;
-		-r)
-			qemu/qemu-system-aarch64 -M virt-cortex-a53,gic_version=3  \
-			-smp cpus=4 -m 4096M  \
-			-kernel output/images/Image \
-			-dtb output/images/virt-a53-gicv3.dtb \
-			-append "root=/dev/mmcblk0 console=ttyAMA0 rw dsched_debug" \
-			-net user,hostfwd=tcp::5555-:22 \
-			-net nic \
-			-serial stdio \
-			-sd output/images/rootfs.ext2
-		;;
-		-d)
-			qemu/qemu-system-aarch64 -M virt-cortex-a53,gic_version=2  \
-			-smp cpus=4 -m 4096M  \
-			-kernel output/images/boot/Image \
-			-dtb output/images/virt-a53-gicv2.dtb \
-			-append "root=/dev/mmcblk0 console=ttyAMA0 rw dsched_debug" \
-			-serial stdio \
-			-S -s \
-			-sd output/images/rootfs.ext2
-		;;
-		*)
-		;;
-	esac
+	qemu/qemu-system-aarch64 -M virt-cortex-a53,gic_version=3  \
+	-smp cpus=4 -m 4096M  \
+	-kernel kernel/output64/arch/arm64/boot/Image \
+	-dtb kernel/output64/arch/arm64/boot/dts/arm/virt-a53-gicv3.dtb \
+	-append "root=/dev/mmcblk0 console=ttyAMA0 rw dsched_debug" \
+	-net user,hostfwd=tcp::5555-:22 \
+	-net nic \
+	-serial stdio \
+	-sd buildroot/output/images/rootfs.ext2
 }
 
+function debug_linux()
+{
+	qemu/qemu-system-aarch64 -M virt-cortex-a53,gic_version=3  \
+	-smp cpus=4 -m 4096M  \
+	-kernel kernel/output64/arch/arm64/boot/Image \
+	-dtb kernel/output64/arch/arm64/boot/dts/arm/virt-a53-gicv3.dtb \
+	-append "root=/dev/mmcblk0 console=ttyAMA0 rw dsched_debug" \
+	-net user,hostfwd=tcp::5555-:22 \
+	-net nic \
+	-serial stdio \
+	-sd buildroot/output/images/rootfs.ext2 \
+	-s \
+	-S
+}
 
-do_build_debug $1
+function build_buildroot()
+{
+	cd buildroot
+	./build.sh -b
+	cd ..
+}
+
+function build_kernel()
+{
+	cd kernel
+	./build_virt-a53.sh -b
+	cd ..
+}
+
+function build_all()
+{
+	build_kernel
+	build_buildroot
+}
+
+function usage()
+{
+	echo "Usage: build.sh [OPTIONS]"
+	echo "Available options:"
+	echo "kernel             -build kernel"
+	echo "buildroot          -build buildroot rootfs"
+	echo "all	 	 -build kernel & rootfs"
+	echo "run		 - run qemu linux"
+	echo "debug		 - debug qemu linux"
+}
+
+OPTIONS="${@:-all}"
+
+for option in ${OPTIONS}; do
+	echo "processing option: $option"
+	case $option in
+		kernel) build_kernel ;;
+		all) build_all ;;
+		buildroot) build_buildroot ;;
+		run) run_linux;;
+		debug) debug_linux;;
+		*) usage ;;
+	esac
+done
