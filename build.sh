@@ -54,7 +54,7 @@ function usage()
 	echo "Usage: build.sh [OPTIONS]"
 	echo "Available options:"
 	echo "kernel             -build kernel"
-	echo "buildroot          -build buildroot rootfs"
+	echo "rootfs             -build buildroot rootfs"
 	echo "all	 	 -build kernel & rootfs"
 	echo "run		 - run qemu linux"
 	echo "debug		 - debug qemu linux"
@@ -67,7 +67,7 @@ for option in ${OPTIONS}; do
 	case $option in
 		kernel) build_kernel ;;
 		all) build_all ;;
-		buildroot) build_buildroot ;;
+		rootfs) build_buildroot ;;
 		run) run_linux;;
 		debug) debug_linux;;
 		*) usage ;;
