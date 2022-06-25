@@ -88,16 +88,6 @@
 		dma-names = "tx", "rx";
 	};
 
-	lan9118@a009000 {
-		compatible = "smsc,lan9118", "smsc,lan9115";
-		reg = <0 0x0a009000 0 0x10000>;
-		phy-mode = "mii";
-		interrupts = <GIC_SPI 15 IRQ_TYPE_LEVEL_HIGH>;
-		reg-io-width = <4>;
-		smsc,irq-active-high;
-		smsc,irq-push-pull;
-	};
-
 	gpio-keys {
 		compatible = "gpio-keys";
 		#size-cells = <0>;
