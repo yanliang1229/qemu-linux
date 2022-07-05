@@ -1,0 +1,30 @@
+{
+   "configurations": [
+        {
+           "name":"Linux",
+           "includePath": [
+               "${workspaceFolder}/**",
+               "${workspaceFolder}/include",
+               "${workspaceFolder}/arch/arm64/include",
+               "${workspaceFolder}/arch/arm/include"
+            ],
+            "forcedInclude": [
+               "${workspaceFolder}/output64/include/generated/autoconf.h",
+               "${workspaceFolder}/output/include/generated/autoconf.h"
+            ],
+
+           "defines": [
+               "__KERNEL__",
+               "__LINUX_ARM_ARCH__=8"
+            ],
+           "compilerPath":"/opt/gcc-linaro-5.4.1-2017.01-x86_64_aarch64-linux-gnu/bin/aarch64-linux-gnu-gcc",
+           "cStandard":"c99",
+           "cppStandard":"c++11",
+           "intelliSenseMode":"linux-gcc-arm64",
+           "compilerArgs": [
+               "ARCH=arm64"
+            ]
+        }
+    ],
+   "version": 4
+}

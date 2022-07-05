@@ -60,8 +60,7 @@ int noinline pci_bus_write_config_##size \
 	return res;							\
 }
 
-int noinline pci_bus_read_config_byte
-	(struct pci_bus *bus, unsigned int devfn, int pos, u8 *value)
+int pci_bus_read_config_byte(struct pci_bus *bus, unsigned int devfn, int pos, u8 *value)
 {
 	int res;
 	unsigned long flags;
@@ -74,8 +73,7 @@ int noinline pci_bus_read_config_byte
 	return res;
 }
 
-int noinline pci_bus_read_config_word
-	(struct pci_bus *bus, unsigned int devfn, int pos, u16 *value)
+int pci_bus_read_config_word(struct pci_bus *bus, unsigned int devfn, int pos, u16 *value)
 {
 	int res;
 	unsigned long flags;
@@ -88,8 +86,7 @@ int noinline pci_bus_read_config_word
 	return res;
 }
 
-int noinline pci_bus_read_config_dword
-	(struct pci_bus *bus, unsigned int devfn, int pos, u32 *value)
+int pci_bus_read_config_dword(struct pci_bus *bus, unsigned int devfn, int pos, u32 *value)
 {
 	int res;
 	unsigned long flags;
@@ -102,9 +99,38 @@ int noinline pci_bus_read_config_dword
 	return res;
 }
 
-PCI_OP_WRITE(byte, u8, 1)
-PCI_OP_WRITE(word, u16, 2)
-PCI_OP_WRITE(dword, u32, 4)
+int pci_bus_write_config_byte(struct pci_bus *bus, unsigned int devfn, int pos, u8 value)
+{
+	int res;
+	unsigned long flags;
+	if (PCI_byte_BAD) return PCIBIOS_BAD_REGISTER_NUMBER;
+	pci_lock_config(flags);
+	res = bus->ops->write(bus, devfn, pos, 1, value);
+	pci_unlock_config(flags);
+	return res;
+}
+
+int pci_bus_write_config_word(struct pci_bus *bus, unsigned int devfn, int pos, u16 value)
+{
+	int res;
+	unsigned long flags;
+	if (PCI_word_BAD) return PCIBIOS_BAD_REGISTER_NUMBER;
+	pci_lock_config(flags);
+	res = bus->ops->write(bus, devfn, pos, 2, value);
+	pci_unlock_config(flags);
+	return res;
+}
+
+int pci_bus_write_config_word(struct pci_bus *bus, unsigned int devfn, int pos, u32 value)
+{
+	int res;
+	unsigned long flags;
+	if (PCI_dword_BAD) return PCIBIOS_BAD_REGISTER_NUMBER;
+	pci_lock_config(flags);
+	res = bus->ops->write(bus, devfn, pos, 4, value);
+	pci_unlock_config(flags);
+	return res;
+}
 
 EXPORT_SYMBOL(pci_bus_read_config_byte);
 EXPORT_SYMBOL(pci_bus_read_config_word);
